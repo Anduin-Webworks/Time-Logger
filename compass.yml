@@ -1,0 +1,17 @@
+name: Time-Logger
+id: ari:cloud:compass:a9370046-464a-4000-8146-9d92acfbc728:component/70fcc8de-61e0-4324-b640-e292e7692006/2407712c-ae08-4000-84ab-94dacb349c74
+description: World of Wacraft Addon that registers log-in and log-out times
+configVersion: 1
+typeId: SERVICE
+fields:
+  tier: 4
+links:
+  - name: null
+    type: REPOSITORY
+    url: https://github.com/Anduin-Webworks/Time-Logger
+relationships:
+  DEPENDS_ON: []
+labels:
+  - source:github
+  - synced-with-jsm
+customFields: null
