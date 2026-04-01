@@ -1,0 +1,10 @@
+## Interface: 120001, 120005
+## Title: TimeLogger
+## Notes: Records character login and logout times. Use /timelogger or /tlog to view and copy CSV or JSON.
+## Author: Oswaldovzki
+## Version: 1.2.0
+## SavedVariables: TimeLoggerDB
+## IconTexture: Interface\AddOns\TimeLogger\TimeLoggerLogo.png
+## X-Curse-Project-ID: 1492060
+
+TimeLogger.lua
