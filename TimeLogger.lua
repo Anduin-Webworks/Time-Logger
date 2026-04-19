@@ -11,6 +11,14 @@ local db
 local pendingPruneDays
 local tempLogoutTicker
 
+--- Centralized time collection using server time for timezone-independent timestamps
+local function GetUnix()
+  if C_DateAndTime and C_DateAndTime.GetServerTimeLocal then
+    return C_DateAndTime.GetServerTimeLocal()
+  end
+  return time()
+end
+
 local function EnsureDB()
   if type(TimeLoggerDB) ~= "table" then
     TimeLoggerDB = {}
@@ -32,7 +40,7 @@ local function UpdateTempLogout()
   local char = UnitName("player") or ""
   local realm = GetRealmName() or ""
   db.temp_logout = {
-    unix = time(),
+    unix = GetUnix(),
     utc = UtcIso(),
     event = "logout",
     character = char,
@@ -68,7 +76,7 @@ local function RecoverOrphanLogout()
   if type(t) ~= "table" or not t.unix then
     return
   end
-  local now = time()
+  local now = GetUnix()
   if t.unix < (last.unix or 0) then
     return
   end
@@ -90,7 +98,7 @@ local function Record(kind)
   local char = UnitName("player") or ""
   local realm = GetRealmName() or ""
   db.events[#db.events + 1] = {
-    unix = time(),
+    unix = GetUnix(),
     utc = UtcIso(),
     event = kind,
     character = char,
@@ -151,16 +159,6 @@ local function BuildCSV()
             e.unix, e.utc, e.event, e.character, e.realm, e.recovery and 1 or 0))
     end
     return table.concat(lines, "\n")
-end
-
-local function BuildJSON()
-    local lines = {}
-    for _, e in ipairs(db.events) do
-        local rec = e.recovery and ',"recovery":true' or ""
-        table.insert(lines, string.format('  {"unix":%d,"utc":"%s","event":"%s","character":"%s","realm":"%s"%s}',
-            e.unix, e.utc, e.event, e.character, e.realm, rec))
-    end
-    return "[\n" .. table.concat(lines, ",\n") .. "\n]"
 end
 
 local function BuildSessionsCSV()
@@ -242,9 +240,14 @@ end
 
 local function DoPrune(days)
   EnsureDB()
-  local cutoff = time() - (days * 86400)
-  db.events_backup = CopyEventsSnapshot()
-  db.events_backup_time = time()
+  local cutoff = GetUnix() - (days * 86400)
+  
+  -- Only create backup if one doesn't exist for this session or if it's old
+  if not db.events_backup or not db.events_backup_time or (GetUnix() - db.events_backup_time) > 3600 then
+    db.events_backup = CopyEventsSnapshot()
+    db.events_backup_time = GetUnix()
+  end
+  
   local kept = {}
   for i = 1, #db.events do
     local e = db.events[i]
