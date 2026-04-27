@@ -181,6 +181,40 @@ local function BuildSessionsJSON()
     return "[\n" .. table.concat(lines, ",\n") .. "\n]"
 end
 
+local function FormatDuration(sec)
+  sec = math.max(0, math.floor(sec or 0))
+  local h = math.floor(sec / 3600)
+  local m = math.floor((sec % 3600) / 60)
+  local s = sec % 60
+  return string.format("%02d:%02d:%02d", h, m, s)
+end
+
+local function GetCurrentSessionDurationSec()
+  EnsureDB()
+  local char = UnitName("player") or ""
+  local realm = GetRealmName() or ""
+  for i = #db.events, 1, -1 do
+    local e = db.events[i]
+    if e.character == char and e.realm == realm then
+      if e.event == "logout" then
+        return nil
+      end
+      if e.event == "login" then
+        return GetUnix() - (e.unix or 0)
+      end
+    end
+  end
+  return nil
+end
+
+local function BuildCurrentSessionLabel()
+  local sec = GetCurrentSessionDurationSec()
+  if not sec then
+    return "Current Session Duration: N/A"
+  end
+  return "Current Session Duration: " .. FormatDuration(sec)
+end
+
 local function CsvEscape(s)
   s = tostring(s or "")
   if s:find('["\r\n,]') then
@@ -270,6 +304,7 @@ end
 
 local exportFrame
 local exportEdit
+local sessionDurationLabel
 local exportMode = "events_csv"
 
 local function ResizeExportEdit()
@@ -320,6 +355,12 @@ local function RefreshExportText()
   ResizeExportEdit()
 end
 
+local function RefreshCurrentSessionLabel()
+  if sessionDurationLabel then
+    sessionDurationLabel:SetText(BuildCurrentSessionLabel())
+  end
+end
+
 local function CreateExportUI()
   local f = CreateFrame("Frame", "TimeLoggerExportFrame", UIParent, "BackdropTemplate")
   f:SetSize(800, 600)
@@ -343,6 +384,11 @@ local function CreateExportUI()
   title:SetPoint("TOP", 0, -14)
   title:SetText("TimeLogger — events & sessions (copy below)")
 
+  local sessionLabel = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  sessionLabel:SetPoint("TOPLEFT", 16, -38)
+  sessionLabel:SetText("Current Session Duration: N/A")
+  sessionDurationLabel = sessionLabel
+
   local closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
   closeBtn:SetPoint("TOPRIGHT", -4, -4)
   closeBtn:SetScript("OnClick", function()
@@ -351,7 +397,7 @@ local function CreateExportUI()
 
   local evCsv = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
   evCsv:SetSize(88, 22)
-  evCsv:SetPoint("TOPLEFT", 16, -38)
+  evCsv:SetPoint("TOPLEFT", 16, -58)
   evCsv:SetText("Events CSV")
   evCsv:SetScript("OnClick", function()
     exportMode = "events_csv"
@@ -462,6 +508,14 @@ local function CreateExportUI()
 
   exportFrame = f
   exportEdit = edit
+  f.sessionRefreshElapsed = 0
+  f:SetScript("OnUpdate", function(self, elapsed)
+    self.sessionRefreshElapsed = (self.sessionRefreshElapsed or 0) + elapsed
+    if self.sessionRefreshElapsed >= 1 then
+      self.sessionRefreshElapsed = 0
+      RefreshCurrentSessionLabel()
+    end
+  end)
 end
 
 local function ShowExport()
@@ -470,6 +524,7 @@ local function ShowExport()
     CreateExportUI()
   end
   RefreshExportText()
+  RefreshCurrentSessionLabel()
   exportFrame:Show()
   exportFrame:Raise()
   C_Timer.After(0, function()
