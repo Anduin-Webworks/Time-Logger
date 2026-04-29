@@ -215,6 +215,43 @@ local function BuildCurrentSessionLabel()
   return "Current Session Duration: " .. FormatDuration(sec)
 end
 
+local function BuildPlaytimeTotals()
+  EnsureDB()
+  local now = GetUnix()
+  local totalsByChar = {}
+  local openByChar = {}
+
+  for i = 1, #db.events do
+    local e = db.events[i]
+    local key = CharKey(e)
+    if e.event == "login" then
+      openByChar[key] = e.unix or 0
+    elseif e.event == "logout" then
+      local startUnix = openByChar[key]
+      local endUnix = e.unix or 0
+      if startUnix and endUnix > startUnix then
+        totalsByChar[key] = (totalsByChar[key] or 0) + (endUnix - startUnix)
+      end
+      openByChar[key] = nil
+    end
+  end
+
+  for key, startUnix in pairs(openByChar) do
+    if startUnix and now > startUnix then
+      totalsByChar[key] = (totalsByChar[key] or 0) + (now - startUnix)
+    end
+  end
+
+  local allTotal = 0
+  for _, sec in pairs(totalsByChar) do
+    allTotal = allTotal + (sec or 0)
+  end
+
+  local currentKey = (GetRealmName() or "") .. "|" .. (UnitName("player") or "")
+  local currentTotal = totalsByChar[currentKey] or 0
+  return currentTotal, allTotal
+end
+
 local function CsvEscape(s)
   s = tostring(s or "")
   if s:find('["\r\n,]') then
@@ -305,6 +342,8 @@ end
 local exportFrame
 local exportEdit
 local sessionDurationLabel
+local currentCharacterTotalLabel
+local allCharactersTotalLabel
 local exportMode = "events_csv"
 
 local function ResizeExportEdit()
@@ -358,6 +397,19 @@ end
 local function RefreshCurrentSessionLabel()
   if sessionDurationLabel then
     sessionDurationLabel:SetText(BuildCurrentSessionLabel())
+  end
+end
+
+local function RefreshPlaytimeSummaryLabels()
+  if not currentCharacterTotalLabel and not allCharactersTotalLabel then
+    return
+  end
+  local currentTotal, allTotal = BuildPlaytimeTotals()
+  if currentCharacterTotalLabel then
+    currentCharacterTotalLabel:SetText("Total This Character: " .. FormatDuration(currentTotal))
+  end
+  if allCharactersTotalLabel then
+    allCharactersTotalLabel:SetText("Total All Characters: " .. FormatDuration(allTotal))
   end
 end
 
@@ -479,6 +531,20 @@ local function CreateExportUI()
     StaticPopup_Show("TIMELOGGER_PRUNE_CONFIRM", tostring(pendingPruneDays))
   end)
 
+  local totalsHeader = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  totalsHeader:SetPoint("BOTTOMRIGHT", -20, 58)
+  totalsHeader:SetText("Total Playtime Summary")
+
+  local currentTotalLabel = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  currentTotalLabel:SetPoint("TOPRIGHT", totalsHeader, "BOTTOMRIGHT", 0, -4)
+  currentTotalLabel:SetText("Total This Character: 00:00:00")
+  currentCharacterTotalLabel = currentTotalLabel
+
+  local allTotalLabel = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  allTotalLabel:SetPoint("TOPRIGHT", currentTotalLabel, "BOTTOMRIGHT", 0, -2)
+  allTotalLabel:SetText("Total All Characters: 00:00:00")
+  allCharactersTotalLabel = allTotalLabel
+
   local scroll = CreateFrame("ScrollFrame", nil, f, "UIPanelScrollFrameTemplate")
   scroll:SetPoint("TOPLEFT", 16, -94)
   scroll:SetPoint("BOTTOMRIGHT", -32, 68)
@@ -514,6 +580,7 @@ local function CreateExportUI()
     if self.sessionRefreshElapsed >= 1 then
       self.sessionRefreshElapsed = 0
       RefreshCurrentSessionLabel()
+      RefreshPlaytimeSummaryLabels()
     end
   end)
 end
@@ -525,6 +592,7 @@ local function ShowExport()
   end
   RefreshExportText()
   RefreshCurrentSessionLabel()
+  RefreshPlaytimeSummaryLabels()
   exportFrame:Show()
   exportFrame:Raise()
   C_Timer.After(0, function()
