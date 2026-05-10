@@ -10,6 +10,7 @@ local HEARTBEAT_SEC = 300 -- 5 minutes
 local db
 local pendingPruneDays
 local tempLogoutTicker
+local lastPlayedRequestUnix
 
 --- Centralized time collection using server time for timezone-independent timestamps
 local function GetUnix()
@@ -25,6 +26,9 @@ local function EnsureDB()
   end
   if type(TimeLoggerDB.events) ~= "table" then
     TimeLoggerDB.events = {}
+  end
+  if type(TimeLoggerDB.played_totals) ~= "table" then
+    TimeLoggerDB.played_totals = {}
   end
   db = TimeLoggerDB
 end
@@ -110,6 +114,10 @@ local function CharKey(e)
   return (e.realm or "") .. "|" .. (e.character or "")
 end
 
+local function CurrentCharKey()
+  return (GetRealmName() or "") .. "|" .. (UnitName("player") or "")
+end
+
 -- OPTIMIZED: Linear Session Builder
 local function BuildSessions()
     local sessions = {}
@@ -181,6 +189,76 @@ local function BuildSessionsJSON()
     return "[\n" .. table.concat(lines, ",\n") .. "\n]"
 end
 
+<<<<<<< Updated upstream
+=======
+local function FormatDuration(sec)
+  sec = math.max(0, math.floor(sec or 0))
+  local h = math.floor(sec / 3600)
+  local m = math.floor((sec % 3600) / 60)
+  local s = sec % 60
+  return string.format("%02d:%02d:%02d", h, m, s)
+end
+
+local function GetCurrentSessionDurationSec()
+  EnsureDB()
+  local char = UnitName("player") or ""
+  local realm = GetRealmName() or ""
+  for i = #db.events, 1, -1 do
+    local e = db.events[i]
+    if e.character == char and e.realm == realm then
+      if e.event == "logout" then
+        return nil
+      end
+      if e.event == "login" then
+        -- Use local wall-clock time for live second-level ticking in the UI.
+        return time() - (e.unix or 0)
+      end
+    end
+  end
+  return nil
+end
+
+local function BuildCurrentSessionLabel()
+  local sec = GetCurrentSessionDurationSec()
+  if not sec then
+    return "Current Session Duration: N/A"
+  end
+  return "Current Session Duration: " .. FormatDuration(sec)
+end
+
+local function SaveCurrentCharacterPlayed(totalSec)
+  EnsureDB()
+  local n = tonumber(totalSec)
+  if not n then
+    return
+  end
+  db.played_totals[CurrentCharKey()] = math.max(0, math.floor(n))
+end
+
+local function RequestPlayedTotals(force)
+  if not RequestTimePlayed then
+    return
+  end
+  local now = time()
+  if not force and lastPlayedRequestUnix and (now - lastPlayedRequestUnix) < 60 then
+    return
+  end
+  lastPlayedRequestUnix = now
+  RequestTimePlayed()
+end
+
+local function BuildPlaytimeTotals()
+  EnsureDB()
+  local allTotal = 0
+  for _, sec in pairs(db.played_totals) do
+    allTotal = allTotal + (sec or 0)
+  end
+
+  local currentTotal = db.played_totals[CurrentCharKey()] or 0
+  return currentTotal, allTotal
+end
+
+>>>>>>> Stashed changes
 local function CsvEscape(s)
   s = tostring(s or "")
   if s:find('["\r\n,]') then
@@ -320,6 +398,57 @@ local function RefreshExportText()
   ResizeExportEdit()
 end
 
+<<<<<<< Updated upstream
+=======
+local function RefreshCurrentSessionLabel()
+  if sessionDurationLabel then
+    sessionDurationLabel:SetText(BuildCurrentSessionLabel())
+  end
+end
+
+local function RefreshPlaytimeSummaryLabels()
+  if not currentCharacterTotalLabel and not allCharactersTotalLabel then
+    return
+  end
+  local currentTotal, allTotal = BuildPlaytimeTotals()
+  if currentCharacterTotalLabel then
+    currentCharacterTotalLabel:SetText("Total This Character: " .. FormatDuration(currentTotal))
+  end
+  if allCharactersTotalLabel then
+    allCharactersTotalLabel:SetText("Total All Characters: " .. FormatDuration(allTotal))
+  end
+end
+
+local function SaveCurrentPlayedFromEventsFallback()
+  EnsureDB()
+  local key = CurrentCharKey()
+  local total = 0
+  local openStart
+  local char = UnitName("player") or ""
+  local realm = GetRealmName() or ""
+  for i = 1, #db.events do
+    local e = db.events[i]
+    if e.character == char and e.realm == realm then
+      if e.event == "login" then
+        openStart = e.unix or 0
+      elseif e.event == "logout" then
+        local endUnix = e.unix or 0
+        if openStart and endUnix > openStart then
+          total = total + (endUnix - openStart)
+        end
+        openStart = nil
+      end
+    end
+  end
+  if openStart and time() > openStart then
+    total = total + (time() - openStart)
+  end
+  if total > 0 and not db.played_totals[key] then
+    db.played_totals[key] = math.floor(total)
+  end
+end
+
+>>>>>>> Stashed changes
 local function CreateExportUI()
   local f = CreateFrame("Frame", "TimeLoggerExportFrame", UIParent, "BackdropTemplate")
   f:SetSize(800, 600)
@@ -469,6 +598,7 @@ local function ShowExport()
   if not exportFrame then
     CreateExportUI()
   end
+  RequestPlayedTotals(false)
   RefreshExportText()
   exportFrame:Show()
   exportFrame:Raise()
@@ -506,6 +636,7 @@ local eventFrame = CreateFrame("Frame")
 eventFrame:RegisterEvent("ADDON_LOADED")
 eventFrame:RegisterEvent("PLAYER_LOGIN")
 eventFrame:RegisterEvent("PLAYER_LOGOUT")
+eventFrame:RegisterEvent("TIME_PLAYED_MSG")
 
 eventFrame:SetScript("OnEvent", function(_, event, arg1)
   if event == "ADDON_LOADED" and arg1 == ADDON_NAME then
@@ -515,11 +646,24 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1)
     Record("login")
     UpdateTempLogout()
     StartTempLogoutTicker()
+    SaveCurrentPlayedFromEventsFallback()
+    C_Timer.After(2, function()
+      RequestPlayedTotals(true)
+    end)
   elseif event == "PLAYER_LOGOUT" then
     StopTempLogoutTicker()
     EnsureDB()
+    RequestPlayedTotals(true)
     db.temp_logout = nil
     Record("logout")
+  elseif event == "TIME_PLAYED_MSG" then
+    local totalTime = tonumber(arg1)
+    if totalTime then
+      SaveCurrentCharacterPlayed(totalTime)
+      if exportFrame and exportFrame:IsShown() then
+        RefreshPlaytimeSummaryLabels()
+      end
+    end
   end
 end)
 
