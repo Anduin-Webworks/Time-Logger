@@ -189,8 +189,6 @@ local function BuildSessionsJSON()
     return "[\n" .. table.concat(lines, ",\n") .. "\n]"
 end
 
-<<<<<<< Updated upstream
-=======
 local function FormatDuration(sec)
   sec = math.max(0, math.floor(sec or 0))
   local h = math.floor(sec / 3600)
@@ -258,7 +256,6 @@ local function BuildPlaytimeTotals()
   return currentTotal, allTotal
 end
 
->>>>>>> Stashed changes
 local function CsvEscape(s)
   s = tostring(s or "")
   if s:find('["\r\n,]') then
@@ -348,6 +345,9 @@ end
 
 local exportFrame
 local exportEdit
+local sessionDurationLabel
+local currentCharacterTotalLabel
+local allCharactersTotalLabel
 local exportMode = "events_csv"
 
 local function ResizeExportEdit()
@@ -398,8 +398,6 @@ local function RefreshExportText()
   ResizeExportEdit()
 end
 
-<<<<<<< Updated upstream
-=======
 local function RefreshCurrentSessionLabel()
   if sessionDurationLabel then
     sessionDurationLabel:SetText(BuildCurrentSessionLabel())
@@ -448,10 +446,9 @@ local function SaveCurrentPlayedFromEventsFallback()
   end
 end
 
->>>>>>> Stashed changes
 local function CreateExportUI()
   local f = CreateFrame("Frame", "TimeLoggerExportFrame", UIParent, "BackdropTemplate")
-  f:SetSize(800, 600)
+  f:SetSize(860, 620)
   f:SetPoint("CENTER")
   f:SetFrameStrata("DIALOG")
   f:SetMovable(true)
@@ -460,17 +457,29 @@ local function CreateExportUI()
   f:SetScript("OnDragStart", f.StartMoving)
   f:SetScript("OnDragStop", f.StopMovingOrSizing)
   f:SetBackdrop({
-    bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+    bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
     edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
     tile = true,
-    tileSize = 32,
+    tileSize = 16,
     edgeSize = 32,
     insets = { left = 8, right = 8, top = 10, bottom = 8 },
   })
+  f:SetBackdropColor(0.04, 0.05, 0.08, 0.95)
+  f:SetBackdropBorderColor(0.45, 0.5, 0.65, 1)
 
-  local title = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-  title:SetPoint("TOP", 0, -14)
-  title:SetText("TimeLogger — events & sessions (copy below)")
+  local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+  title:SetPoint("TOPLEFT", 20, -16)
+  title:SetJustifyH("LEFT")
+  title:SetText("TimeLogger Export")
+
+  local subtitle = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  subtitle:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -4)
+  subtitle:SetText("Events and sessions in CSV/JSON")
+
+  local sessionLabel = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  sessionLabel:SetPoint("TOPLEFT", 20, -52)
+  sessionLabel:SetText("Current Session Duration: N/A")
+  sessionDurationLabel = sessionLabel
 
   local closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
   closeBtn:SetPoint("TOPRIGHT", -4, -4)
@@ -479,8 +488,8 @@ local function CreateExportUI()
   end)
 
   local evCsv = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-  evCsv:SetSize(88, 22)
-  evCsv:SetPoint("TOPLEFT", 16, -38)
+  evCsv:SetSize(104, 22)
+  evCsv:SetPoint("TOPLEFT", 20, -78)
   evCsv:SetText("Events CSV")
   evCsv:SetScript("OnClick", function()
     exportMode = "events_csv"
@@ -488,17 +497,35 @@ local function CreateExportUI()
   end)
 
   local evJson = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-  evJson:SetSize(88, 22)
-  evJson:SetPoint("LEFT", evCsv, "RIGHT", 6, 0)
+  evJson:SetSize(104, 22)
+  evJson:SetPoint("LEFT", evCsv, "RIGHT", 8, 0)
   evJson:SetText("Events JSON")
   evJson:SetScript("OnClick", function()
     exportMode = "events_json"
     RefreshExportText()
   end)
 
+  local sessCsv = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+  sessCsv:SetSize(112, 22)
+  sessCsv:SetPoint("LEFT", evJson, "RIGHT", 8, 0)
+  sessCsv:SetText("Sessions CSV")
+  sessCsv:SetScript("OnClick", function()
+    exportMode = "sessions_csv"
+    RefreshExportText()
+  end)
+
+  local sessJson = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+  sessJson:SetSize(112, 22)
+  sessJson:SetPoint("LEFT", sessCsv, "RIGHT", 8, 0)
+  sessJson:SetText("Sessions JSON")
+  sessJson:SetScript("OnClick", function()
+    exportMode = "sessions_json"
+    RefreshExportText()
+  end)
+
   local copyBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-  copyBtn:SetSize(120, 22)
-  copyBtn:SetPoint("TOPRIGHT", -32, -38)
+  copyBtn:SetSize(140, 22)
+  copyBtn:SetPoint("TOPRIGHT", -36, -78)
   copyBtn:SetText("Copy to clipboard")
   copyBtn:SetScript("OnClick", function()
     local text = exportEdit:GetText() or ""
@@ -512,27 +539,15 @@ local function CreateExportUI()
     end
   end)
 
-  local sessCsv = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-  sessCsv:SetSize(108, 22)
-  sessCsv:SetPoint("TOPLEFT", 16, -66)
-  sessCsv:SetText("Sessions CSV")
-  sessCsv:SetScript("OnClick", function()
-    exportMode = "sessions_csv"
-    RefreshExportText()
-  end)
+  local topDivider = f:CreateTexture(nil, "ARTWORK")
+  topDivider:SetColorTexture(0.3, 0.35, 0.45, 0.45)
+  topDivider:SetPoint("TOPLEFT", 20, -108)
+  topDivider:SetPoint("TOPRIGHT", -20, -108)
+  topDivider:SetHeight(1)
 
-  local sessJson = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-  sessJson:SetSize(108, 22)
-  sessJson:SetPoint("LEFT", sessCsv, "RIGHT", 6, 0)
-  sessJson:SetText("Sessions JSON")
-  sessJson:SetScript("OnClick", function()
-    exportMode = "sessions_json"
-    RefreshExportText()
-  end)
-
-  local pruneLabel = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-  pruneLabel:SetPoint("BOTTOMLEFT", 20, 38)
-  pruneLabel:SetText("Prune events older than")
+  local pruneLabel = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  pruneLabel:SetPoint("BOTTOMLEFT", 20, 44)
+  pruneLabel:SetText("Data cleanup:")
 
   local pruneDays = CreateFrame("EditBox", nil, f, "InputBoxTemplate")
   pruneDays:SetSize(50, 20)
@@ -546,7 +561,7 @@ local function CreateExportUI()
 
   local daysSuffix = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
   daysSuffix:SetPoint("LEFT", pruneDays, "RIGHT", 6, 0)
-  daysSuffix:SetText("days")
+  daysSuffix:SetText("days old")
 
   local pruneBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
   pruneBtn:SetSize(72, 22)
@@ -562,9 +577,29 @@ local function CreateExportUI()
     StaticPopup_Show("TIMELOGGER_PRUNE_CONFIRM", tostring(pendingPruneDays))
   end)
 
+  local totalsHeader = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  totalsHeader:SetPoint("BOTTOMRIGHT", -20, 62)
+  totalsHeader:SetText("Total Playtime Summary")
+
+  local currentTotalLabel = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  currentTotalLabel:SetPoint("TOPRIGHT", totalsHeader, "BOTTOMRIGHT", 0, -4)
+  currentTotalLabel:SetText("Total This Character: 00:00:00")
+  currentCharacterTotalLabel = currentTotalLabel
+
+  local allTotalLabel = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  allTotalLabel:SetPoint("TOPRIGHT", currentTotalLabel, "BOTTOMRIGHT", 0, -2)
+  allTotalLabel:SetText("Total All Characters: 00:00:00")
+  allCharactersTotalLabel = allTotalLabel
+
+  local bottomDivider = f:CreateTexture(nil, "ARTWORK")
+  bottomDivider:SetColorTexture(0.3, 0.35, 0.45, 0.45)
+  bottomDivider:SetPoint("BOTTOMLEFT", 20, 74)
+  bottomDivider:SetPoint("BOTTOMRIGHT", -20, 74)
+  bottomDivider:SetHeight(1)
+
   local scroll = CreateFrame("ScrollFrame", nil, f, "UIPanelScrollFrameTemplate")
-  scroll:SetPoint("TOPLEFT", 16, -94)
-  scroll:SetPoint("BOTTOMRIGHT", -32, 68)
+  scroll:SetPoint("TOPLEFT", 20, -116)
+  scroll:SetPoint("BOTTOMRIGHT", -36, 82)
   f.scroll = scroll
 
   local measureFS = f:CreateFontString(nil, "ARTWORK", "ChatFontNormal")
@@ -591,6 +626,15 @@ local function CreateExportUI()
 
   exportFrame = f
   exportEdit = edit
+  f.sessionRefreshElapsed = 0
+  f:SetScript("OnUpdate", function(self, elapsed)
+    self.sessionRefreshElapsed = (self.sessionRefreshElapsed or 0) + elapsed
+    if self.sessionRefreshElapsed >= 1 then
+      self.sessionRefreshElapsed = 0
+      RefreshCurrentSessionLabel()
+      RefreshPlaytimeSummaryLabels()
+    end
+  end)
 end
 
 local function ShowExport()
@@ -600,6 +644,8 @@ local function ShowExport()
   end
   RequestPlayedTotals(false)
   RefreshExportText()
+  RefreshCurrentSessionLabel()
+  RefreshPlaytimeSummaryLabels()
   exportFrame:Show()
   exportFrame:Raise()
   C_Timer.After(0, function()
