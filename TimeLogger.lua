@@ -33,8 +33,22 @@ local function EnsureDB()
   db = TimeLoggerDB
 end
 
+--- ISO 8601 instant in UTC (Z suffix); independent of player timezone.
 local function UtcIso()
   return date("!%Y-%m-%dT%H:%M:%SZ")
+end
+
+local function CsvEscape(s)
+  s = tostring(s or "")
+  if s:find('["\r\n,]') then
+    s = '"' .. s:gsub('"', '""') .. '"'
+  end
+  return s
+end
+
+local function JsonEscape(s)
+  s = tostring(s or "")
+  return s:gsub("\\", "\\\\"):gsub('"', '\\"'):gsub("\r", "\\r"):gsub("\n", "\\n")
 end
 
 --- Last-known-alive snapshot (same shape as an event). Updated every HEARTBEAT_SEC while in-game.
@@ -110,10 +124,6 @@ local function Record(kind)
   }
 end
 
-local function CharKey(e)
-  return (e.realm or "") .. "|" .. (e.character or "")
-end
-
 local function CurrentCharKey()
   return (GetRealmName() or "") .. "|" .. (UnitName("player") or "")
 end
@@ -163,8 +173,13 @@ end
 local function BuildCSV()
     local lines = {"unix,utc_iso,event,character,realm,recovery"}
     for _, e in ipairs(db.events) do
-        table.insert(lines, string.format("%d,%s,%s,%s,%s,%d", 
-            e.unix, e.utc, e.event, e.character, e.realm, e.recovery and 1 or 0))
+        table.insert(lines, string.format("%d,%s,%s,%s,%s,%d",
+            e.unix or 0,
+            CsvEscape(e.utc),
+            CsvEscape(e.event),
+            CsvEscape(e.character),
+            CsvEscape(e.realm),
+            e.recovery and 1 or 0))
     end
     return table.concat(lines, "\n")
 end
@@ -174,7 +189,15 @@ local function BuildSessionsCSV()
     local lines = {"session_id,start_unix,start_utc,end_unix,end_utc,duration_sec,character,realm,status"}
     for i, s in ipairs(sessions) do
         table.insert(lines, string.format("%d,%d,%s,%d,%s,%d,%s,%s,%s",
-            i, s.start_unix, s.start_utc, s.end_unix, s.end_utc, s.duration_sec or 0, s.character, s.realm, s.status))
+            i,
+            s.start_unix,
+            CsvEscape(s.start_utc),
+            s.end_unix,
+            CsvEscape(s.end_utc),
+            s.duration_sec or 0,
+            CsvEscape(s.character),
+            CsvEscape(s.realm),
+            CsvEscape(s.status)))
     end
     return table.concat(lines, "\n")
 end
@@ -183,8 +206,17 @@ local function BuildSessionsJSON()
     local sessions = BuildSessions()
     local lines = {}
     for i, s in ipairs(sessions) do
-        table.insert(lines, string.format('  {"id":%d,"start_unix":%d,"start_utc":"%s","end_unix":%d,"end_utc":"%s","duration":%d,"char":"%s","realm":"%s","status":"%s"}',
-            i, s.start_unix, s.start_utc, s.end_unix, s.end_utc, s.duration_sec or 0, s.character, s.realm, s.status))
+        table.insert(lines, string.format(
+          '  {"id":%d,"start_unix":%d,"start_utc":"%s","end_unix":%d,"end_utc":"%s","duration":%d,"char":"%s","realm":"%s","status":"%s"}',
+          i,
+          s.start_unix,
+          JsonEscape(s.start_utc),
+          s.end_unix,
+          JsonEscape(s.end_utc),
+          s.duration_sec or 0,
+          JsonEscape(s.character),
+          JsonEscape(s.realm),
+          JsonEscape(s.status)))
     end
     return "[\n" .. table.concat(lines, ",\n") .. "\n]"
 end
@@ -208,8 +240,7 @@ local function GetCurrentSessionDurationSec()
         return nil
       end
       if e.event == "login" then
-        -- Use local wall-clock time for live second-level ticking in the UI.
-        return time() - (e.unix or 0)
+        return GetUnix() - (e.unix or 0)
       end
     end
   end
@@ -237,7 +268,7 @@ local function RequestPlayedTotals(force)
   if not RequestTimePlayed then
     return
   end
-  local now = time()
+  local now = GetUnix()
   if not force and lastPlayedRequestUnix and (now - lastPlayedRequestUnix) < 60 then
     return
   end
@@ -254,19 +285,6 @@ local function BuildPlaytimeTotals()
 
   local currentTotal = db.played_totals[CurrentCharKey()] or 0
   return currentTotal, allTotal
-end
-
-local function CsvEscape(s)
-  s = tostring(s or "")
-  if s:find('["\r\n,]') then
-    s = '"' .. s:gsub('"', '""') .. '"'
-  end
-  return s
-end
-
-local function JsonEscape(s)
-  s = tostring(s or "")
-  return s:gsub("\\", "\\\\"):gsub('"', '\\"'):gsub("\r", "\\r"):gsub("\n", "\\n")
 end
 
 local function BuildJSON()
@@ -438,8 +456,9 @@ local function SaveCurrentPlayedFromEventsFallback()
       end
     end
   end
-  if openStart and time() > openStart then
-    total = total + (time() - openStart)
+  local now = GetUnix()
+  if openStart and now > openStart then
+    total = total + (now - openStart)
   end
   if total > 0 and not db.played_totals[key] then
     db.played_totals[key] = math.floor(total)
