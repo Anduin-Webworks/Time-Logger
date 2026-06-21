@@ -24,7 +24,10 @@ local function EnsureDB()
 end
 
 --- ISO 8601 instant in UTC (Z suffix); independent of player timezone.
-local function UtcIso()
+local function UtcIso(unix)
+  if unix then
+    return date("!%Y-%m-%dT%H:%M:%SZ", unix)
+  end
   return date("!%Y-%m-%dT%H:%M:%SZ")
 end
 
@@ -41,19 +44,34 @@ local function JsonEscape(s)
   return s:gsub("\\", "\\\\"):gsub('"', '\\"'):gsub("\r", "\\r"):gsub("\n", "\\n")
 end
 
+local function BuildEventFields(kind, unix, extra)
+  unix = unix or GetUnix()
+  local fields = {
+    unix = unix,
+    utc = UtcIso(unix),
+    event = kind,
+    character = UnitName("player") or "",
+    realm = GetRealmName() or "",
+  }
+  if extra then
+    for key, value in pairs(extra) do
+      fields[key] = value
+    end
+  end
+  local context = TimeLoggerContext:Collect(unix)
+  for key, value in pairs(context) do
+    if fields[key] == nil then
+      fields[key] = value
+    end
+  end
+  return fields
+end
+
 --- Last-known-alive snapshot (same shape as an event). Updated every HEARTBEAT_SEC while in-game.
 --- Used only when the last stored event is login and we need a synthetic logout after crash / missing PLAYER_LOGOUT.
 local function UpdateTempLogout()
   EnsureDB()
-  local char = UnitName("player") or ""
-  local realm = GetRealmName() or ""
-  TimeLoggerStorage:SetTempLogout({
-    unix = GetUnix(),
-    utc = UtcIso(),
-    event = "logout",
-    character = char,
-    realm = realm,
-  })
+  TimeLoggerStorage:SetTempLogout(BuildEventFields("logout"))
 end
 
 local function StopTempLogoutTicker()
@@ -89,82 +107,47 @@ local function RecoverOrphanLogout()
     return
   end
 
-  TimeLoggerStorage:InsertEvent({
-    unix = t.unix,
+  TimeLoggerStorage:InsertEvent(BuildEventFields("logout", t.unix, {
     utc = t.utc or UtcIso(),
-    event = "logout",
     character = t.character or last.character,
     realm = t.realm or last.realm,
     recovery = true,
-  })
+    patch = t.patch or last.patch,
+    expansion = t.expansion or last.expansion,
+    location = t.location,
+    weekday = t.weekday,
+    subscription = t.subscription or last.subscription,
+    local_dt = t.local_dt,
+  }))
 end
 
 local function Record(kind)
   EnsureDB()
-  TimeLoggerStorage:InsertEvent({
-    unix = GetUnix(),
-    utc = UtcIso(),
-    event = kind,
-    character = UnitName("player") or "",
-    realm = GetRealmName() or "",
-  })
+  TimeLoggerStorage:InsertEvent(BuildEventFields(kind))
+end
+
+local function EnrichLastLoginLocation()
+  local char = UnitName("player") or ""
+  local realm = GetRealmName() or ""
+  local last = TimeLoggerStorage:GetLastEventForCharacter(char, realm)
+  if not last or last.event ~= "login" then
+    return
+  end
+  local location = TimeLoggerContext:GetLocationName()
+  if location == "" or location == (last.location or "") then
+    return
+  end
+  TimeLoggerStorage:UpdateEvent(last.id, { location = location })
+  if exportFrame and exportFrame:IsShown() then
+    RefreshTableView()
+  end
 end
 
 local function CurrentCharKey()
   return TimeLoggerStorage:MakeCharKey(GetRealmName() or "", UnitName("player") or "")
 end
 
--- Export Helpers
-local function BuildCSV()
-  local lines = {"unix,utc_iso,event,character,realm,recovery"}
-  TimeLoggerStorage:IterateEvents(function(e)
-    table.insert(lines, string.format("%d,%s,%s,%s,%s,%d",
-      e.unix or 0,
-      CsvEscape(e.utc),
-      CsvEscape(e.event),
-      CsvEscape(e.character),
-      CsvEscape(e.realm),
-      e.recovery and 1 or 0))
-  end)
-  return table.concat(lines, "\n")
-end
-
-local function BuildSessionsCSV()
-  local sessions = TimeLoggerStorage:BuildSessions(false)
-  local lines = {"session_id,start_unix,start_utc,end_unix,end_utc,duration_sec,character,realm,status"}
-  for i, s in ipairs(sessions) do
-    table.insert(lines, string.format("%d,%d,%s,%d,%s,%d,%s,%s,%s",
-      i,
-      s.start_unix,
-      CsvEscape(s.start_utc),
-      s.end_unix,
-      CsvEscape(s.end_utc),
-      s.duration_sec or 0,
-      CsvEscape(s.character),
-      CsvEscape(s.realm),
-      CsvEscape(s.status)))
-  end
-  return table.concat(lines, "\n")
-end
-
-local function BuildSessionsJSON()
-  local sessions = TimeLoggerStorage:BuildSessions(false)
-  local lines = {}
-  for i, s in ipairs(sessions) do
-    table.insert(lines, string.format(
-      '  {"id":%d,"start_unix":%d,"start_utc":"%s","end_unix":%d,"end_utc":"%s","duration":%d,"char":"%s","realm":"%s","status":"%s"}',
-      i,
-      s.start_unix,
-      JsonEscape(s.start_utc),
-      s.end_unix,
-      JsonEscape(s.end_utc),
-      s.duration_sec or 0,
-      JsonEscape(s.character),
-      JsonEscape(s.realm),
-      JsonEscape(s.status)))
-  end
-  return "[\n" .. table.concat(lines, ",\n") .. "\n]"
-end
+-- Export Helpers (clipboard serialization) -----------------------------------
 
 local function FormatDuration(sec)
   sec = math.max(0, math.floor(sec or 0))
@@ -193,10 +176,8 @@ end
 
 local function BuildCurrentSessionLabel()
   local sec = GetCurrentSessionDurationSec()
-  if not sec then
-    return "Current Session Duration: N/A"
-  end
-  return "Current Session Duration: " .. FormatDuration(sec)
+  local value = sec and FormatDuration(sec) or TimeLoggerL("UI_SESSION_NA")
+  return TimeLoggerL("UI_SESSION_LABEL", value)
 end
 
 local function SaveCurrentCharacterPlayed(totalSec)
@@ -226,31 +207,6 @@ local function BuildPlaytimeTotals()
   return currentTotal, TimeLoggerStorage:SumPlayedTotals()
 end
 
-local function BuildJSON()
-  local parts = { "[" }
-  local n = TimeLoggerStorage:GetEventCount()
-  local i = 0
-  TimeLoggerStorage:IterateEvents(function(e)
-    i = i + 1
-    local rec = e.recovery and ',"recovery":true' or ""
-    local chunk = string.format(
-      '{"unix":%d,"utc":"%s","event":"%s","character":"%s","realm":"%s"%s}',
-      e.unix or 0,
-      JsonEscape(e.utc),
-      JsonEscape(e.event),
-      JsonEscape(e.character),
-      JsonEscape(e.realm),
-      rec
-    )
-    if i < n then
-      chunk = chunk .. ","
-    end
-    parts[#parts + 1] = chunk
-  end)
-  parts[#parts + 1] = "]"
-  return table.concat(parts, "\n")
-end
-
 local function DoPrune(days)
   EnsureDB()
   local now = GetUnix()
@@ -261,71 +217,384 @@ local function DoPrune(days)
   end
 
   local keptCount = TimeLoggerStorage:PruneBefore(cutoff)
-  print(
-    string.format(
-      "|cff00ff00TimeLogger:|r Pruned events older than %d days. Kept %d rows; full pre-prune snapshot in events_backup (%d rows).",
-      days,
-      keptCount,
-      TimeLoggerStorage:GetBackupRowCount()
-    )
+  TimeLoggerLocale:Print(
+    "MSG_PRUNE_DONE",
+    days,
+    keptCount,
+    TimeLoggerStorage:GetBackupRowCount()
   )
 end
 
 -- Export UI -----------------------------------------------------------------
 
 local exportFrame
-local exportEdit
+local dataTableView
 local sessionDurationLabel
 local currentCharacterTotalLabel
 local allCharactersTotalLabel
 local exportMode = "events_csv"
+local modeButtons = {}
 
-local function ResizeExportEdit()
-  if not exportEdit or not exportFrame then
-    return
+local UI_COLORS = {
+  frameBg = { 0.05, 0.05, 0.06, 0.96 },
+  frameBorder = { 0.78, 0.62, 0.18, 0.9 },
+  title = { 0.95, 0.78, 0.28, 1 },
+  subtitle = { 0.72, 0.72, 0.76, 1 },
+  divider = { 0.42, 0.36, 0.22, 0.55 },
+  buttonActive = { 0.22, 0.18, 0.10, 1 },
+  buttonInactive = { 0.10, 0.10, 0.11, 0.85 },
+}
+
+local function GetEventColumns()
+  return {
+    { key = "unix", title = TimeLoggerL("COL_UNIX"), width = 72 },
+    { key = "utc", title = TimeLoggerL("COL_UTC"), width = 128 },
+    { key = "local_dt", title = TimeLoggerL("COL_LOCAL_DT"), width = 128 },
+    {
+      key = "weekday",
+      title = TimeLoggerL("COL_WEEKDAY"),
+      width = 72,
+      getValue = function(row)
+        return TimeLoggerLocale:FormatWeekday(row.weekday)
+      end,
+    },
+    {
+      key = "event",
+      title = TimeLoggerL("COL_EVENT"),
+      width = 64,
+      getValue = function(row)
+        return TimeLoggerLocale:FormatEventType(row.event)
+      end,
+    },
+    { key = "character", title = TimeLoggerL("COL_CHARACTER"), width = 96 },
+    { key = "realm", title = TimeLoggerL("COL_REALM"), width = 96 },
+    { key = "location", title = TimeLoggerL("COL_LOCATION"), width = 140 },
+    { key = "patch", title = TimeLoggerL("COL_PATCH"), width = 56 },
+    { key = "expansion", title = TimeLoggerL("COL_EXPANSION"), width = 100 },
+    {
+      key = "subscription",
+      title = TimeLoggerL("COL_SUBSCRIPTION"),
+      width = 88,
+      getValue = function(row)
+        return TimeLoggerLocale:FormatSubscription(row.subscription)
+      end,
+    },
+    {
+      key = "recovery",
+      title = TimeLoggerL("COL_RECOVERY"),
+      width = 60,
+      getValue = function(row)
+        return TimeLoggerLocale:FormatRecovery(row.recovery)
+      end,
+      muted = function(row)
+        return not row.recovery
+      end,
+    },
+  }
+end
+
+local function GetSessionColumns()
+  return {
+    { key = "id", title = TimeLoggerL("COL_ID"), width = 32 },
+    { key = "start_unix", title = TimeLoggerL("COL_START"), width = 72 },
+    { key = "start_utc", title = TimeLoggerL("COL_START_UTC"), width = 120 },
+    { key = "start_local_dt", title = TimeLoggerL("COL_START_LOCAL"), width = 120 },
+    { key = "end_unix", title = TimeLoggerL("COL_END"), width = 72 },
+    { key = "end_utc", title = TimeLoggerL("COL_END_UTC"), width = 120 },
+    { key = "end_local_dt", title = TimeLoggerL("COL_END_LOCAL"), width = 120 },
+    {
+      key = "duration_sec",
+      title = TimeLoggerL("COL_DURATION"),
+      width = 72,
+      getValue = function(row)
+        return FormatDuration(row.duration_sec or 0)
+      end,
+    },
+    { key = "patch", title = TimeLoggerL("COL_PATCH"), width = 52 },
+    { key = "expansion", title = TimeLoggerL("COL_EXPANSION"), width = 92 },
+    { key = "start_location", title = TimeLoggerL("COL_START_LOCATION"), width = 120 },
+    { key = "end_location", title = TimeLoggerL("COL_END_LOCATION"), width = 120 },
+    {
+      key = "weekday",
+      title = TimeLoggerL("COL_WEEKDAY"),
+      width = 68,
+      getValue = function(row)
+        return TimeLoggerLocale:FormatWeekday(row.weekday)
+      end,
+    },
+    {
+      key = "subscription",
+      title = TimeLoggerL("COL_SUBSCRIPTION"),
+      width = 84,
+      getValue = function(row)
+        return TimeLoggerLocale:FormatSubscription(row.subscription)
+      end,
+    },
+    { key = "character", title = TimeLoggerL("COL_CHARACTER"), width = 88 },
+    { key = "realm", title = TimeLoggerL("COL_REALM"), width = 88 },
+    {
+      key = "status",
+      title = TimeLoggerL("COL_STATUS"),
+      width = 68,
+      getValue = function(row)
+        return TimeLoggerLocale:FormatSessionStatus(row.status)
+      end,
+    },
+  }
+end
+
+local function BuildEventRows()
+  local rows = {}
+  TimeLoggerStorage:IterateEvents(function(event)
+    rows[#rows + 1] = {
+      unix = event.unix or 0,
+      utc = event.utc or "",
+      local_dt = event.local_dt or "",
+      weekday = event.weekday,
+      event = event.event or "",
+      character = event.character or "",
+      realm = event.realm or "",
+      location = event.location or "",
+      patch = event.patch or "",
+      expansion = event.expansion or "",
+      subscription = event.subscription or "",
+      recovery = event.recovery,
+    }
+  end)
+  return rows
+end
+
+local function BuildSessionRows()
+  local rows = {}
+  local sessions = TimeLoggerStorage:BuildSessions(false)
+  for i, session in ipairs(sessions) do
+    rows[#rows + 1] = {
+      id = i,
+      start_unix = session.start_unix or 0,
+      start_utc = session.start_utc or "",
+      start_local_dt = session.start_local_dt or "",
+      end_unix = session.end_unix or 0,
+      end_utc = session.end_utc or "",
+      end_local_dt = session.end_local_dt or "",
+      duration_sec = session.duration_sec or 0,
+      patch = session.patch or "",
+      expansion = session.expansion or "",
+      start_location = session.start_location or "",
+      end_location = session.end_location or "",
+      weekday = session.weekday,
+      subscription = session.subscription or "",
+      character = session.character or "",
+      realm = session.realm or "",
+      status = session.status or "",
+    }
   end
-  local scroll = exportFrame.scroll
-  local w = math.max(scroll:GetWidth() - 24, 1)
-  exportEdit:SetWidth(w)
-  local insetL, insetR, insetT, insetB = exportEdit:GetTextInsets()
-  insetL = insetL or 0
-  insetR = insetR or 0
-  insetT = insetT or 0
-  insetB = insetB or 0
-  local contentW = math.max(w - insetL - insetR, 1)
-  local fs = exportFrame.measureFS
-  local font, size, flags = exportEdit:GetFont()
-  if font then
-    fs:SetFont(font, size, flags)
+  return rows
+end
+
+local function IsSessionsMode()
+  return exportMode == "sessions_csv" or exportMode == "sessions_json"
+end
+
+local function BuildCSVFromEvents(rows)
+  local lines = {
+    "unix,utc_iso,local_dt,weekday,event,character,realm,location,patch,expansion,subscription,recovery",
+  }
+  for _, event in ipairs(rows) do
+    table.insert(lines, string.format(
+      "%d,%s,%s,%d,%s,%s,%s,%s,%s,%s,%s,%d",
+      event.unix or 0,
+      CsvEscape(event.utc),
+      CsvEscape(event.local_dt),
+      event.weekday or 0,
+      CsvEscape(event.event),
+      CsvEscape(event.character),
+      CsvEscape(event.realm),
+      CsvEscape(event.location),
+      CsvEscape(event.patch),
+      CsvEscape(event.expansion),
+      CsvEscape(event.subscription),
+      event.recovery and 1 or 0))
   end
-  fs:SetWidth(contentW)
-  if fs.SetWordWrap then
-    fs:SetWordWrap(true)
+  return table.concat(lines, "\n")
+end
+
+local function BuildJSONFromEvents(rows)
+  local parts = { "[" }
+  local n = #rows
+  for i, event in ipairs(rows) do
+    local rec = event.recovery and ',"recovery":true' or ""
+    local chunk = string.format(
+      '{"unix":%d,"utc":"%s","local_dt":"%s","weekday":%d,"event":"%s","character":"%s","realm":"%s","location":"%s","patch":"%s","expansion":"%s","subscription":"%s"%s}',
+      event.unix or 0,
+      JsonEscape(event.utc),
+      JsonEscape(event.local_dt),
+      event.weekday or 0,
+      JsonEscape(event.event),
+      JsonEscape(event.character),
+      JsonEscape(event.realm),
+      JsonEscape(event.location),
+      JsonEscape(event.patch),
+      JsonEscape(event.expansion),
+      JsonEscape(event.subscription),
+      rec
+    )
+    if i < n then
+      chunk = chunk .. ","
+    end
+    parts[#parts + 1] = chunk
   end
-  fs:SetText(exportEdit:GetText() or "")
-  local textH = fs:GetStringHeight() or 0
-  local h = math.max(textH + insetT + insetB + 4, scroll:GetHeight())
-  exportEdit:SetHeight(h)
+  parts[#parts + 1] = "]"
+  return table.concat(parts, "\n")
+end
+
+local function BuildCSVFromSessions(rows)
+  local lines = {
+    "session_id,start_unix,start_utc,start_local_dt,end_unix,end_utc,end_local_dt,duration_sec,patch,expansion,start_location,end_location,weekday,subscription,character,realm,status",
+  }
+  for _, session in ipairs(rows) do
+    table.insert(lines, string.format(
+      "%d,%d,%s,%s,%d,%s,%s,%d,%s,%s,%s,%s,%d,%s,%s,%s,%s",
+      session.id or 0,
+      session.start_unix or 0,
+      CsvEscape(session.start_utc),
+      CsvEscape(session.start_local_dt),
+      session.end_unix or 0,
+      CsvEscape(session.end_utc),
+      CsvEscape(session.end_local_dt),
+      session.duration_sec or 0,
+      CsvEscape(session.patch),
+      CsvEscape(session.expansion),
+      CsvEscape(session.start_location),
+      CsvEscape(session.end_location),
+      session.weekday or 0,
+      CsvEscape(session.subscription),
+      CsvEscape(session.character),
+      CsvEscape(session.realm),
+      CsvEscape(session.status)))
+  end
+  return table.concat(lines, "\n")
+end
+
+local function BuildJSONFromSessions(rows)
+  local lines = {}
+  for _, session in ipairs(rows) do
+    table.insert(lines, string.format(
+      '  {"id":%d,"start_unix":%d,"start_utc":"%s","start_local_dt":"%s","end_unix":%d,"end_utc":"%s","end_local_dt":"%s","duration":%d,"patch":"%s","expansion":"%s","start_location":"%s","end_location":"%s","weekday":%d,"subscription":"%s","char":"%s","realm":"%s","status":"%s"}',
+      session.id or 0,
+      session.start_unix or 0,
+      JsonEscape(session.start_utc),
+      JsonEscape(session.start_local_dt),
+      session.end_unix or 0,
+      JsonEscape(session.end_utc),
+      JsonEscape(session.end_local_dt),
+      session.duration_sec or 0,
+      JsonEscape(session.patch),
+      JsonEscape(session.expansion),
+      JsonEscape(session.start_location),
+      JsonEscape(session.end_location),
+      session.weekday or 0,
+      JsonEscape(session.subscription),
+      JsonEscape(session.character),
+      JsonEscape(session.realm),
+      JsonEscape(session.status)))
+  end
+  return "[\n" .. table.concat(lines, ",\n") .. "\n]"
+end
+
+local function GetExportRows()
+  if dataTableView and dataTableView:HasActiveFilters() then
+    return dataTableView:GetFilteredRows()
+  end
+  if IsSessionsMode() then
+    return BuildSessionRows()
+  end
+  return BuildEventRows()
 end
 
 local function GetExportText()
   EnsureDB()
+  local rows = GetExportRows()
   if exportMode == "events_json" then
-    return BuildJSON()
+    return BuildJSONFromEvents(rows)
   elseif exportMode == "sessions_csv" then
-    return BuildSessionsCSV()
+    return BuildCSVFromSessions(rows)
   elseif exportMode == "sessions_json" then
-    return BuildSessionsJSON()
+    return BuildJSONFromSessions(rows)
   end
-  return BuildCSV()
+  return BuildCSVFromEvents(rows)
 end
 
-local function RefreshExportText()
-  if not exportEdit then
+local function StyleModeButton(button, active)
+  if not button or not button.bg then
     return
   end
-  exportEdit:SetText(GetExportText())
-  ResizeExportEdit()
+  local color = active and UI_COLORS.buttonActive or UI_COLORS.buttonInactive
+  button.bg:SetColorTexture(color[1], color[2], color[3], color[4] or 1)
+  if active then
+    button:SetBackdropBorderColor(0.78, 0.62, 0.18, 0.95)
+  else
+    button:SetBackdropBorderColor(0.45, 0.45, 0.48, 0.65)
+  end
+end
+
+local function RefreshModeButtons()
+  for mode, button in pairs(modeButtons) do
+    StyleModeButton(button, mode == exportMode)
+  end
+end
+
+local function RefreshTableView()
+  if not dataTableView then
+    return
+  end
+  if IsSessionsMode() then
+    dataTableView:SetColumns(GetSessionColumns())
+    dataTableView:SetRows(BuildSessionRows())
+  else
+    dataTableView:SetColumns(GetEventColumns())
+    dataTableView:SetRows(BuildEventRows())
+  end
+end
+
+local function SetExportMode(mode)
+  exportMode = mode
+  RefreshModeButtons()
+  RefreshTableView()
+end
+
+local function CreateModeButton(parent, label, mode)
+  local button = CreateFrame("Button", nil, parent, "BackdropTemplate")
+  button:SetSize(104, 24)
+  button:SetBackdrop({
+    bgFile = "Interface\\Buttons\\WHITE8x8",
+    edgeFile = "Interface\\Buttons\\WHITE8x8",
+    tile = false,
+    edgeSize = 1,
+    insets = { left = 1, right = 1, top = 1, bottom = 1 },
+  })
+
+  local bg = button:CreateTexture(nil, "BACKGROUND")
+  bg:SetAllPoints()
+  button.bg = bg
+
+  local text = button:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  text:SetPoint("CENTER")
+  text:SetText(label)
+  text:SetTextColor(0.82, 0.82, 0.86, 1)
+  button.label = text
+
+  button:SetScript("OnEnter", function(self)
+    self.label:SetTextColor(0.95, 0.78, 0.28, 1)
+  end)
+  button:SetScript("OnLeave", function(self)
+    self.label:SetTextColor(0.82, 0.82, 0.86, 1)
+  end)
+  button:SetScript("OnClick", function()
+    SetExportMode(mode)
+  end)
+
+  modeButtons[mode] = button
+  return button
 end
 
 local function RefreshCurrentSessionLabel()
@@ -340,10 +609,10 @@ local function RefreshPlaytimeSummaryLabels()
   end
   local currentTotal, allTotal = BuildPlaytimeTotals()
   if currentCharacterTotalLabel then
-    currentCharacterTotalLabel:SetText("Total This Character: " .. FormatDuration(currentTotal))
+    currentCharacterTotalLabel:SetText(TimeLoggerL("UI_TOTAL_THIS_CHAR", FormatDuration(currentTotal)))
   end
   if allCharactersTotalLabel then
-    allCharactersTotalLabel:SetText("Total All Characters: " .. FormatDuration(allTotal))
+    allCharactersTotalLabel:SetText(TimeLoggerL("UI_TOTAL_ALL_CHARS", FormatDuration(allTotal)))
   end
 end
 
@@ -366,7 +635,7 @@ end
 
 local function CreateExportUI()
   local f = CreateFrame("Frame", "TimeLoggerExportFrame", UIParent, "BackdropTemplate")
-  f:SetSize(860, 620)
+  f:SetSize(1140, 640)
   f:SetPoint("CENTER")
   f:SetFrameStrata("DIALOG")
   f:SetMovable(true)
@@ -375,28 +644,35 @@ local function CreateExportUI()
   f:SetScript("OnDragStart", f.StartMoving)
   f:SetScript("OnDragStop", f.StopMovingOrSizing)
   f:SetBackdrop({
-    bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
-    edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-    tile = true,
-    tileSize = 16,
-    edgeSize = 32,
-    insets = { left = 8, right = 8, top = 10, bottom = 8 },
+    bgFile = "Interface\\Buttons\\WHITE8x8",
+    edgeFile = "Interface\\Buttons\\WHITE8x8",
+    tile = false,
+    edgeSize = 1,
+    insets = { left = 1, right = 1, top = 1, bottom = 1 },
   })
-  f:SetBackdropColor(0.04, 0.05, 0.08, 0.95)
-  f:SetBackdropBorderColor(0.45, 0.5, 0.65, 1)
+  f:SetBackdropColor(UI_COLORS.frameBg[1], UI_COLORS.frameBg[2], UI_COLORS.frameBg[3], UI_COLORS.frameBg[4])
+  f:SetBackdropBorderColor(
+    UI_COLORS.frameBorder[1],
+    UI_COLORS.frameBorder[2],
+    UI_COLORS.frameBorder[3],
+    UI_COLORS.frameBorder[4]
+  )
 
   local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
   title:SetPoint("TOPLEFT", 20, -16)
   title:SetJustifyH("LEFT")
-  title:SetText("TimeLogger Export")
+  title:SetText(TimeLoggerL("UI_TITLE"))
+  title:SetTextColor(UI_COLORS.title[1], UI_COLORS.title[2], UI_COLORS.title[3], 1)
 
   local subtitle = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   subtitle:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -4)
-  subtitle:SetText("Events and sessions in CSV/JSON")
+  subtitle:SetText(TimeLoggerL("UI_SUBTITLE"))
+  subtitle:SetTextColor(UI_COLORS.subtitle[1], UI_COLORS.subtitle[2], UI_COLORS.subtitle[3], 1)
 
   local sessionLabel = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   sessionLabel:SetPoint("TOPLEFT", 20, -52)
-  sessionLabel:SetText("Current Session Duration: N/A")
+  sessionLabel:SetText(BuildCurrentSessionLabel())
+  sessionLabel:SetTextColor(UI_COLORS.subtitle[1], UI_COLORS.subtitle[2], UI_COLORS.subtitle[3], 1)
   sessionDurationLabel = sessionLabel
 
   local closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
@@ -405,67 +681,82 @@ local function CreateExportUI()
     f:Hide()
   end)
 
-  local evCsv = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-  evCsv:SetSize(104, 22)
+  local evCsv = CreateModeButton(f, TimeLoggerL("BTN_EVENTS_CSV"), "events_csv")
   evCsv:SetPoint("TOPLEFT", 20, -78)
-  evCsv:SetText("Events CSV")
-  evCsv:SetScript("OnClick", function()
-    exportMode = "events_csv"
-    RefreshExportText()
-  end)
 
-  local evJson = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-  evJson:SetSize(104, 22)
+  local evJson = CreateModeButton(f, TimeLoggerL("BTN_EVENTS_JSON"), "events_json")
+  evJson:SetSize(104, 24)
   evJson:SetPoint("LEFT", evCsv, "RIGHT", 8, 0)
-  evJson:SetText("Events JSON")
-  evJson:SetScript("OnClick", function()
-    exportMode = "events_json"
-    RefreshExportText()
-  end)
 
-  local sessCsv = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-  sessCsv:SetSize(112, 22)
+  local sessCsv = CreateModeButton(f, TimeLoggerL("BTN_SESSIONS_CSV"), "sessions_csv")
+  sessCsv:SetSize(112, 24)
   sessCsv:SetPoint("LEFT", evJson, "RIGHT", 8, 0)
-  sessCsv:SetText("Sessions CSV")
-  sessCsv:SetScript("OnClick", function()
-    exportMode = "sessions_csv"
-    RefreshExportText()
-  end)
 
-  local sessJson = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-  sessJson:SetSize(112, 22)
+  local sessJson = CreateModeButton(f, TimeLoggerL("BTN_SESSIONS_JSON"), "sessions_json")
+  sessJson:SetSize(112, 24)
   sessJson:SetPoint("LEFT", sessCsv, "RIGHT", 8, 0)
-  sessJson:SetText("Sessions JSON")
-  sessJson:SetScript("OnClick", function()
-    exportMode = "sessions_json"
-    RefreshExportText()
-  end)
 
-  local copyBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-  copyBtn:SetSize(140, 22)
+  local copyBtn = CreateFrame("Button", nil, f, "BackdropTemplate")
+  copyBtn:SetSize(140, 24)
   copyBtn:SetPoint("TOPRIGHT", -36, -78)
-  copyBtn:SetText("Copy to clipboard")
+  copyBtn:SetBackdrop({
+    bgFile = "Interface\\Buttons\\WHITE8x8",
+    edgeFile = "Interface\\Buttons\\WHITE8x8",
+    tile = false,
+    edgeSize = 1,
+    insets = { left = 1, right = 1, top = 1, bottom = 1 },
+  })
+  copyBtn:SetBackdropColor(0.14, 0.12, 0.08, 1)
+  copyBtn:SetBackdropBorderColor(0.78, 0.62, 0.18, 0.95)
+  local copyLabel = copyBtn:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  copyLabel:SetPoint("CENTER")
+  copyLabel:SetText(TimeLoggerL("BTN_COPY"))
+  copyLabel:SetTextColor(0.95, 0.78, 0.28, 1)
+  copyBtn:SetScript("OnEnter", function()
+    copyBtn:SetBackdropColor(0.20, 0.16, 0.10, 1)
+  end)
+  copyBtn:SetScript("OnLeave", function()
+    copyBtn:SetBackdropColor(0.14, 0.12, 0.08, 1)
+  end)
   copyBtn:SetScript("OnClick", function()
-    local text = exportEdit:GetText() or ""
+    local text = GetExportText()
     if C_ChatInfo and C_ChatInfo.CopyStringToClipboard then
       C_ChatInfo.CopyStringToClipboard(text)
-      print("|cff00ff00TimeLogger:|r Copied " .. #text .. " characters to clipboard.")
+      TimeLoggerLocale:Print("MSG_COPIED", #text)
     else
-      exportEdit:SetFocus()
-      exportEdit:HighlightText()
-      print("|cffff9900TimeLogger:|r Select all (Ctrl+A) and copy (Ctrl+C).")
+      TimeLoggerLocale:PrintWarning("MSG_CLIPBOARD_UNAVAILABLE")
     end
   end)
 
+  local minimapCheck = CreateFrame("CheckButton", nil, f, "UICheckButtonTemplate")
+  minimapCheck:SetSize(24, 24)
+  minimapCheck:SetPoint("RIGHT", copyBtn, "LEFT", -10, 0)
+  minimapCheck:SetChecked(TimeLoggerMinimap:IsEnabled())
+  minimapCheck:SetScript("OnClick", function(self)
+    TimeLoggerMinimap:SetEnabled(self:GetChecked())
+  end)
+  f.minimapCheck = minimapCheck
+
+  local minimapLabel = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  minimapLabel:SetPoint("RIGHT", minimapCheck, "LEFT", -4, 0)
+  minimapLabel:SetText(TimeLoggerL("UI_MINIMAP_BUTTON"))
+  minimapLabel:SetTextColor(UI_COLORS.subtitle[1], UI_COLORS.subtitle[2], UI_COLORS.subtitle[3], 1)
+
   local topDivider = f:CreateTexture(nil, "ARTWORK")
-  topDivider:SetColorTexture(0.3, 0.35, 0.45, 0.45)
+  topDivider:SetColorTexture(
+    UI_COLORS.divider[1],
+    UI_COLORS.divider[2],
+    UI_COLORS.divider[3],
+    UI_COLORS.divider[4]
+  )
   topDivider:SetPoint("TOPLEFT", 20, -108)
   topDivider:SetPoint("TOPRIGHT", -20, -108)
   topDivider:SetHeight(1)
 
   local pruneLabel = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   pruneLabel:SetPoint("BOTTOMLEFT", 20, 44)
-  pruneLabel:SetText("Data cleanup:")
+  pruneLabel:SetText(TimeLoggerL("UI_DATA_CLEANUP"))
+  pruneLabel:SetTextColor(UI_COLORS.subtitle[1], UI_COLORS.subtitle[2], UI_COLORS.subtitle[3], 1)
 
   local pruneDays = CreateFrame("EditBox", nil, f, "InputBoxTemplate")
   pruneDays:SetSize(50, 20)
@@ -479,16 +770,17 @@ local function CreateExportUI()
 
   local daysSuffix = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
   daysSuffix:SetPoint("LEFT", pruneDays, "RIGHT", 6, 0)
-  daysSuffix:SetText("days old")
+  daysSuffix:SetText(TimeLoggerL("UI_DAYS_OLD"))
+  daysSuffix:SetTextColor(UI_COLORS.subtitle[1], UI_COLORS.subtitle[2], UI_COLORS.subtitle[3], 1)
 
   local pruneBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
   pruneBtn:SetSize(72, 22)
   pruneBtn:SetPoint("LEFT", daysSuffix, "RIGHT", 12, 0)
-  pruneBtn:SetText("Prune")
+  pruneBtn:SetText(TimeLoggerL("BTN_PRUNE"))
   pruneBtn:SetScript("OnClick", function()
     local d = tonumber(pruneDays:GetText())
     if not d or d < 1 then
-      print("|cffff9900TimeLogger:|r Enter a number of days (1 or more).")
+      TimeLoggerLocale:PrintWarning("MSG_INVALID_DAYS")
       return
     end
     pendingPruneDays = math.floor(d)
@@ -497,53 +789,46 @@ local function CreateExportUI()
 
   local totalsHeader = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   totalsHeader:SetPoint("BOTTOMRIGHT", -20, 62)
-  totalsHeader:SetText("Total Playtime Summary")
+  totalsHeader:SetText(TimeLoggerL("UI_TOTALS_HEADER"))
+  totalsHeader:SetTextColor(UI_COLORS.title[1], UI_COLORS.title[2], UI_COLORS.title[3], 1)
 
   local currentTotalLabel = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
   currentTotalLabel:SetPoint("TOPRIGHT", totalsHeader, "BOTTOMRIGHT", 0, -4)
-  currentTotalLabel:SetText("Total This Character: 00:00:00")
+  currentTotalLabel:SetText(TimeLoggerL("UI_TOTAL_THIS_CHAR", "00:00:00"))
+  currentTotalLabel:SetTextColor(UI_COLORS.subtitle[1], UI_COLORS.subtitle[2], UI_COLORS.subtitle[3], 1)
   currentCharacterTotalLabel = currentTotalLabel
 
   local allTotalLabel = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
   allTotalLabel:SetPoint("TOPRIGHT", currentTotalLabel, "BOTTOMRIGHT", 0, -2)
-  allTotalLabel:SetText("Total All Characters: 00:00:00")
+  allTotalLabel:SetText(TimeLoggerL("UI_TOTAL_ALL_CHARS", "00:00:00"))
+  allTotalLabel:SetTextColor(UI_COLORS.subtitle[1], UI_COLORS.subtitle[2], UI_COLORS.subtitle[3], 1)
   allCharactersTotalLabel = allTotalLabel
 
   local bottomDivider = f:CreateTexture(nil, "ARTWORK")
-  bottomDivider:SetColorTexture(0.3, 0.35, 0.45, 0.45)
+  bottomDivider:SetColorTexture(
+    UI_COLORS.divider[1],
+    UI_COLORS.divider[2],
+    UI_COLORS.divider[3],
+    UI_COLORS.divider[4]
+  )
   bottomDivider:SetPoint("BOTTOMLEFT", 20, 74)
   bottomDivider:SetPoint("BOTTOMRIGHT", -20, 74)
   bottomDivider:SetHeight(1)
 
-  local scroll = CreateFrame("ScrollFrame", nil, f, "UIPanelScrollFrameTemplate")
-  scroll:SetPoint("TOPLEFT", 20, -116)
-  scroll:SetPoint("BOTTOMRIGHT", -36, 82)
-  f.scroll = scroll
-
-  local measureFS = f:CreateFontString(nil, "ARTWORK", "ChatFontNormal")
-  measureFS:SetPoint("TOPLEFT", UIParent, "BOTTOMRIGHT", 10000, 10000)
-  measureFS:Hide()
-  f.measureFS = measureFS
-
-  local edit = CreateFrame("EditBox", nil, scroll)
-  edit:SetMultiLine(true)
-  edit:SetAutoFocus(false)
-  edit:SetFontObject(ChatFontNormal)
-  edit:SetWidth(460)
-  edit:SetTextInsets(8, 8, 8, 8)
-  edit:SetScript("OnEscapePressed", function()
-    f:Hide()
-  end)
-  edit:SetScript("OnTextChanged", function(self, userInput)
-    if userInput then
-      return
-    end
-    ResizeExportEdit()
-  end)
-  scroll:SetScrollChild(edit)
+  dataTableView = TimeLoggerTableView:Create(f, "TimeLoggerDataTable", {
+    colors = TimeLoggerTableView.DEFAULT_COLORS,
+  })
+  dataTableView:SetPoint("TOPLEFT", 16, -112)
+  dataTableView:SetPoint("BOTTOMRIGHT", -16, 78)
 
   exportFrame = f
-  exportEdit = edit
+  f:EnableKeyboard(true)
+  f:SetScript("OnKeyDown", function(self, key)
+    if key == "ESCAPE" then
+      self:Hide()
+    end
+  end)
+  RefreshModeButtons()
   f.sessionRefreshElapsed = 0
   f:SetScript("OnUpdate", function(self, elapsed)
     self.sessionRefreshElapsed = (self.sessionRefreshElapsed or 0) + elapsed
@@ -560,21 +845,32 @@ local function ShowExport()
   if not exportFrame then
     CreateExportUI()
   end
+  if exportFrame.minimapCheck then
+    exportFrame.minimapCheck:SetChecked(TimeLoggerMinimap:IsEnabled())
+  end
   RequestPlayedTotals(false)
-  RefreshExportText()
+  RefreshTableView()
   RefreshCurrentSessionLabel()
   RefreshPlaytimeSummaryLabels()
   exportFrame:Show()
   exportFrame:Raise()
   C_Timer.After(0, function()
-    if exportFrame and exportFrame:IsShown() then
-      ResizeExportEdit()
+    if dataTableView and exportFrame and exportFrame:IsShown() then
+      dataTableView:UpdateVisibleRows()
     end
   end)
 end
 
+local function ToggleExport()
+  if exportFrame and exportFrame:IsShown() then
+    exportFrame:Hide()
+    return
+  end
+  ShowExport()
+end
+
 StaticPopupDialogs["TIMELOGGER_PRUNE_CONFIRM"] = {
-  text = "Prune events older than %s days?|nYour full current event list will be copied to events_backup first.",
+  text = TimeLoggerL("POPUP_PRUNE"),
   button1 = YES,
   button2 = NO,
   OnAccept = function()
@@ -582,7 +878,7 @@ StaticPopupDialogs["TIMELOGGER_PRUNE_CONFIRM"] = {
       DoPrune(pendingPruneDays)
       pendingPruneDays = nil
       if exportFrame and exportFrame:IsShown() then
-        RefreshExportText()
+        RefreshTableView()
       end
     end
   end,
@@ -605,12 +901,14 @@ eventFrame:RegisterEvent("TIME_PLAYED_MSG")
 eventFrame:SetScript("OnEvent", function(_, event, arg1)
   if event == "ADDON_LOADED" and arg1 == ADDON_NAME then
     EnsureDB()
+    TimeLoggerMinimap:Init(ToggleExport)
   elseif event == "PLAYER_LOGIN" then
     RecoverOrphanLogout()
     Record("login")
     UpdateTempLogout()
     StartTempLogoutTicker()
     SaveCurrentPlayedFromEventsFallback()
+    C_Timer.After(2, EnrichLastLoginLocation)
     C_Timer.After(2, function()
       RequestPlayedTotals(true)
     end)

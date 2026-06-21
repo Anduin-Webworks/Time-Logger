@@ -11,7 +11,37 @@ TimeLoggerStorage = TimeLoggerStorage or {}
 
 local Storage = TimeLoggerStorage
 
-local SCHEMA_VERSION = 2
+local SCHEMA_VERSION = 3
+
+local EVENT_FIELD_KEYS = {
+  "unix",
+  "utc",
+  "event",
+  "character",
+  "realm",
+  "recovery",
+  "patch",
+  "expansion",
+  "location",
+  "weekday",
+  "subscription",
+  "local_dt",
+}
+
+local function CopyEventFields(source, includeId)
+  if not source then
+    return nil
+  end
+  local copy = {}
+  if includeId and source.id then
+    copy.id = source.id
+  end
+  for i = 1, #EVENT_FIELD_KEYS do
+    local key = EVENT_FIELD_KEYS[i]
+    copy[key] = source[key]
+  end
+  return copy
+end
 
 local db
 
@@ -28,17 +58,11 @@ local function CopyEventRecord(event)
     return nil
   end
   if CopyTable then
-    return CopyTable(event)
+    local copy = CopyTable(event)
+    copy.id = event.id
+    return copy
   end
-  return {
-    id = event.id,
-    unix = event.unix,
-    utc = event.utc,
-    event = event.event,
-    character = event.character,
-    realm = event.realm,
-    recovery = event.recovery,
-  }
+  return CopyEventFields(event, true)
 end
 
 local function EnsureIndexTables()
@@ -86,15 +110,8 @@ local function MigrateFromLegacyEvents(legacyEvents)
     if type(legacy) == "table" then
       local id = db.next_event_id
       db.next_event_id = id + 1
-      db.events[id] = {
-        id = id,
-        unix = legacy.unix,
-        utc = legacy.utc,
-        event = legacy.event,
-        character = legacy.character,
-        realm = legacy.realm,
-        recovery = legacy.recovery,
-      }
+      db.events[id] = CopyEventFields(legacy, false)
+      db.events[id].id = id
       db.event_order[#db.event_order + 1] = id
     end
   end
@@ -117,24 +134,26 @@ function Storage:EnsureDB()
   if version < SCHEMA_VERSION then
     local legacyEvents = db.events
     local migratedCount = 0
-    if type(legacyEvents) == "table" and #legacyEvents > 0 and legacyEvents[1] and not legacyEvents[1].id then
-      migratedCount = MigrateFromLegacyEvents(legacyEvents)
-    elseif type(db.event_order) ~= "table" or type(db.events) ~= "table" then
-      migratedCount = MigrateFromLegacyEvents(type(legacyEvents) == "table" and legacyEvents or {})
-    else
-      db.schema_version = SCHEMA_VERSION
-      db.next_event_id = db.next_event_id or 1
-      db.event_order = db.event_order or {}
-      db.events = db.events or {}
-      EnsureIndexTables()
-      RebuildIndexesFromOrder()
+    if version < 2 then
+      if type(legacyEvents) == "table" and #legacyEvents > 0 and legacyEvents[1] and not legacyEvents[1].id then
+        migratedCount = MigrateFromLegacyEvents(legacyEvents)
+      elseif type(db.event_order) ~= "table" or type(db.events) ~= "table" then
+        migratedCount = MigrateFromLegacyEvents(type(legacyEvents) == "table" and legacyEvents or {})
+      else
+        db.schema_version = 2
+        db.next_event_id = db.next_event_id or 1
+        db.event_order = db.event_order or {}
+        db.events = db.events or {}
+        EnsureIndexTables()
+        RebuildIndexesFromOrder()
+      end
+      if migratedCount > 0 then
+        TimeLoggerLocale:Print("MSG_MIGRATION", 2, migratedCount)
+      end
+      version = tonumber(db.schema_version) or 2
     end
-    if migratedCount > 0 then
-      print(string.format(
-        "|cff00ff00TimeLogger:|r Upgraded storage to indexed database (schema v%d). Migrated %d events.",
-        SCHEMA_VERSION,
-        migratedCount
-      ))
+    if version < SCHEMA_VERSION then
+      db.schema_version = SCHEMA_VERSION
     end
   else
     db.next_event_id = db.next_event_id or 1
@@ -241,6 +260,12 @@ function Storage:BuildSessions(forceRebuild)
           status = "open",
           end_unix = 0,
           end_utc = "",
+          patch = event.patch,
+          expansion = event.expansion,
+          start_location = event.location,
+          weekday = event.weekday,
+          subscription = event.subscription,
+          start_local_dt = event.local_dt,
         })
         openSessions[key] = #sessions
       elseif event.event == "logout" then
@@ -251,6 +276,8 @@ function Storage:BuildSessions(forceRebuild)
           session.end_utc = event.utc
           session.duration_sec = event.unix - session.start_unix
           session.status = event.recovery and "recovered" or "closed"
+          session.end_location = event.location
+          session.end_local_dt = event.local_dt
           openSessions[key] = nil
         end
       end
@@ -267,15 +294,8 @@ function Storage:InsertEvent(fields)
   local id = db.next_event_id
   db.next_event_id = id + 1
 
-  local event = {
-    id = id,
-    unix = fields.unix,
-    utc = fields.utc,
-    event = fields.event,
-    character = fields.character,
-    realm = fields.realm,
-    recovery = fields.recovery,
-  }
+  local event = CopyEventFields(fields, false)
+  event.id = id
 
   db.events[id] = event
   db.event_order[#db.event_order + 1] = id
@@ -291,6 +311,29 @@ function Storage:InsertEvent(fields)
 
   self:InvalidateSessions()
   return event
+end
+
+function Storage:UpdateEvent(id, patch)
+  self:EnsureDB()
+  local event = db.events[id]
+  if not event or type(patch) ~= "table" then
+    return false
+  end
+  for key, value in pairs(patch) do
+    if key ~= "id" then
+      event[key] = value
+    end
+  end
+  self:InvalidateSessions()
+  return true
+end
+
+function Storage:UpdateLastEventForCharacter(character, realm, patch)
+  local event = self:GetLastEventForCharacter(character, realm)
+  if not event then
+    return false
+  end
+  return self:UpdateEvent(event.id, patch)
 end
 
 function Storage:CopyEventsSnapshot()
