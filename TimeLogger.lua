@@ -7,7 +7,6 @@ local ADDON_NAME = ...
 
 local HEARTBEAT_SEC = 300 -- 5 minutes
 
-local db
 local pendingPruneDays
 local tempLogoutTicker
 local lastPlayedRequestUnix
@@ -21,16 +20,7 @@ local function GetUnix()
 end
 
 local function EnsureDB()
-  if type(TimeLoggerDB) ~= "table" then
-    TimeLoggerDB = {}
-  end
-  if type(TimeLoggerDB.events) ~= "table" then
-    TimeLoggerDB.events = {}
-  end
-  if type(TimeLoggerDB.played_totals) ~= "table" then
-    TimeLoggerDB.played_totals = {}
-  end
-  db = TimeLoggerDB
+  TimeLoggerStorage:EnsureDB()
 end
 
 --- ISO 8601 instant in UTC (Z suffix); independent of player timezone.
@@ -57,13 +47,13 @@ local function UpdateTempLogout()
   EnsureDB()
   local char = UnitName("player") or ""
   local realm = GetRealmName() or ""
-  db.temp_logout = {
+  TimeLoggerStorage:SetTempLogout({
     unix = GetUnix(),
     utc = UtcIso(),
     event = "logout",
     character = char,
     realm = realm,
-  }
+  })
 end
 
 local function StopTempLogoutTicker()
@@ -81,19 +71,16 @@ end
 --- If the last row is login (no logout was saved), insert a logout using the last heartbeat, if valid.
 local function RecoverOrphanLogout()
   EnsureDB()
-  local ev = db.events
-  local n = #ev
-  if n == 0 then
+  local last = TimeLoggerStorage:GetLastEvent()
+  if not last or (last.event or "") ~= "login" then
     return
   end
-  local last = ev[n]
-  if (last.event or "") ~= "login" then
-    return
-  end
-  local t = db.temp_logout
+
+  local t = TimeLoggerStorage:GetTempLogout()
   if type(t) ~= "table" or not t.unix then
     return
   end
+
   local now = GetUnix()
   if t.unix < (last.unix or 0) then
     return
@@ -101,124 +88,82 @@ local function RecoverOrphanLogout()
   if t.unix >= now then
     return
   end
-  ev[n + 1] = {
+
+  TimeLoggerStorage:InsertEvent({
     unix = t.unix,
     utc = t.utc or UtcIso(),
     event = "logout",
     character = t.character or last.character,
     realm = t.realm or last.realm,
     recovery = true,
-  }
+  })
 end
 
 local function Record(kind)
   EnsureDB()
-  local char = UnitName("player") or ""
-  local realm = GetRealmName() or ""
-  db.events[#db.events + 1] = {
+  TimeLoggerStorage:InsertEvent({
     unix = GetUnix(),
     utc = UtcIso(),
     event = kind,
-    character = char,
-    realm = realm,
-  }
+    character = UnitName("player") or "",
+    realm = GetRealmName() or "",
+  })
 end
 
 local function CurrentCharKey()
-  return (GetRealmName() or "") .. "|" .. (UnitName("player") or "")
-end
-
--- OPTIMIZED: Linear Session Builder
-local function BuildSessions()
-    local sessions = {}
-    local openSessions = {}
-
-    for i, e in ipairs(db.events) do
-        local key = e.character .. "-" .. e.realm
-        
-        if e.event == "login" then
-            if openSessions[key] then
-                local prevIdx = openSessions[key]
-                sessions[prevIdx].status = "no_logout"
-            end
-            
-            table.insert(sessions, {
-                start_unix = e.unix,
-                start_utc = e.utc,
-                character = e.character,
-                realm = e.realm,
-                status = "open",
-                end_unix = 0,
-                end_utc = ""
-            })
-            openSessions[key] = #sessions
-            
-        elseif e.event == "logout" then
-            if openSessions[key] then
-                local sIdx = openSessions[key]
-                local s = sessions[sIdx]
-                -- FIXED: Removed trailing commas that caused the syntax error
-                s.end_unix = e.unix
-                s.end_utc = e.utc
-                s.duration_sec = e.unix - s.start_unix
-                s.status = e.recovery and "recovered" or "closed"
-                openSessions[key] = nil
-            end
-        end
-    end
-    return sessions
+  return TimeLoggerStorage:MakeCharKey(GetRealmName() or "", UnitName("player") or "")
 end
 
 -- Export Helpers
 local function BuildCSV()
-    local lines = {"unix,utc_iso,event,character,realm,recovery"}
-    for _, e in ipairs(db.events) do
-        table.insert(lines, string.format("%d,%s,%s,%s,%s,%d",
-            e.unix or 0,
-            CsvEscape(e.utc),
-            CsvEscape(e.event),
-            CsvEscape(e.character),
-            CsvEscape(e.realm),
-            e.recovery and 1 or 0))
-    end
-    return table.concat(lines, "\n")
+  local lines = {"unix,utc_iso,event,character,realm,recovery"}
+  TimeLoggerStorage:IterateEvents(function(e)
+    table.insert(lines, string.format("%d,%s,%s,%s,%s,%d",
+      e.unix or 0,
+      CsvEscape(e.utc),
+      CsvEscape(e.event),
+      CsvEscape(e.character),
+      CsvEscape(e.realm),
+      e.recovery and 1 or 0))
+  end)
+  return table.concat(lines, "\n")
 end
 
 local function BuildSessionsCSV()
-    local sessions = BuildSessions()
-    local lines = {"session_id,start_unix,start_utc,end_unix,end_utc,duration_sec,character,realm,status"}
-    for i, s in ipairs(sessions) do
-        table.insert(lines, string.format("%d,%d,%s,%d,%s,%d,%s,%s,%s",
-            i,
-            s.start_unix,
-            CsvEscape(s.start_utc),
-            s.end_unix,
-            CsvEscape(s.end_utc),
-            s.duration_sec or 0,
-            CsvEscape(s.character),
-            CsvEscape(s.realm),
-            CsvEscape(s.status)))
-    end
-    return table.concat(lines, "\n")
+  local sessions = TimeLoggerStorage:BuildSessions(false)
+  local lines = {"session_id,start_unix,start_utc,end_unix,end_utc,duration_sec,character,realm,status"}
+  for i, s in ipairs(sessions) do
+    table.insert(lines, string.format("%d,%d,%s,%d,%s,%d,%s,%s,%s",
+      i,
+      s.start_unix,
+      CsvEscape(s.start_utc),
+      s.end_unix,
+      CsvEscape(s.end_utc),
+      s.duration_sec or 0,
+      CsvEscape(s.character),
+      CsvEscape(s.realm),
+      CsvEscape(s.status)))
+  end
+  return table.concat(lines, "\n")
 end
 
 local function BuildSessionsJSON()
-    local sessions = BuildSessions()
-    local lines = {}
-    for i, s in ipairs(sessions) do
-        table.insert(lines, string.format(
-          '  {"id":%d,"start_unix":%d,"start_utc":"%s","end_unix":%d,"end_utc":"%s","duration":%d,"char":"%s","realm":"%s","status":"%s"}',
-          i,
-          s.start_unix,
-          JsonEscape(s.start_utc),
-          s.end_unix,
-          JsonEscape(s.end_utc),
-          s.duration_sec or 0,
-          JsonEscape(s.character),
-          JsonEscape(s.realm),
-          JsonEscape(s.status)))
-    end
-    return "[\n" .. table.concat(lines, ",\n") .. "\n]"
+  local sessions = TimeLoggerStorage:BuildSessions(false)
+  local lines = {}
+  for i, s in ipairs(sessions) do
+    table.insert(lines, string.format(
+      '  {"id":%d,"start_unix":%d,"start_utc":"%s","end_unix":%d,"end_utc":"%s","duration":%d,"char":"%s","realm":"%s","status":"%s"}',
+      i,
+      s.start_unix,
+      JsonEscape(s.start_utc),
+      s.end_unix,
+      JsonEscape(s.end_utc),
+      s.duration_sec or 0,
+      JsonEscape(s.character),
+      JsonEscape(s.realm),
+      JsonEscape(s.status)))
+  end
+  return "[\n" .. table.concat(lines, ",\n") .. "\n]"
 end
 
 local function FormatDuration(sec)
@@ -233,16 +178,15 @@ local function GetCurrentSessionDurationSec()
   EnsureDB()
   local char = UnitName("player") or ""
   local realm = GetRealmName() or ""
-  for i = #db.events, 1, -1 do
-    local e = db.events[i]
-    if e.character == char and e.realm == realm then
-      if e.event == "logout" then
-        return nil
-      end
-      if e.event == "login" then
-        return GetUnix() - (e.unix or 0)
-      end
-    end
+  local last = TimeLoggerStorage:GetLastEventForCharacter(char, realm)
+  if not last then
+    return nil
+  end
+  if last.event == "logout" then
+    return nil
+  end
+  if last.event == "login" then
+    return GetUnix() - (last.unix or 0)
   end
   return nil
 end
@@ -261,7 +205,7 @@ local function SaveCurrentCharacterPlayed(totalSec)
   if not n then
     return
   end
-  db.played_totals[CurrentCharKey()] = math.max(0, math.floor(n))
+  TimeLoggerStorage:SetPlayedTotal(CurrentCharKey(), math.max(0, math.floor(n)))
 end
 
 local function RequestPlayedTotals(force)
@@ -278,20 +222,16 @@ end
 
 local function BuildPlaytimeTotals()
   EnsureDB()
-  local allTotal = 0
-  for _, sec in pairs(db.played_totals) do
-    allTotal = allTotal + (sec or 0)
-  end
-
-  local currentTotal = db.played_totals[CurrentCharKey()] or 0
-  return currentTotal, allTotal
+  local currentTotal = TimeLoggerStorage:GetPlayedTotal(CurrentCharKey()) or 0
+  return currentTotal, TimeLoggerStorage:SumPlayedTotals()
 end
 
 local function BuildJSON()
   local parts = { "[" }
-  local n = #db.events
-  for i = 1, n do
-    local e = db.events[i]
+  local n = TimeLoggerStorage:GetEventCount()
+  local i = 0
+  TimeLoggerStorage:IterateEvents(function(e)
+    i = i + 1
     local rec = e.recovery and ',"recovery":true' or ""
     local chunk = string.format(
       '{"unix":%d,"utc":"%s","event":"%s","character":"%s","realm":"%s"%s}',
@@ -306,55 +246,27 @@ local function BuildJSON()
       chunk = chunk .. ","
     end
     parts[#parts + 1] = chunk
-  end
+  end)
   parts[#parts + 1] = "]"
   return table.concat(parts, "\n")
 end
 
-local function CopyEventsSnapshot()
-  local t = {}
-  for i = 1, #db.events do
-    local e = db.events[i]
-    if CopyTable then
-      t[i] = CopyTable(e)
-    else
-      t[i] = {
-        unix = e.unix,
-        utc = e.utc,
-        event = e.event,
-        character = e.character,
-        realm = e.realm,
-        recovery = e.recovery,
-      }
-    end
-  end
-  return t
-end
-
 local function DoPrune(days)
   EnsureDB()
-  local cutoff = GetUnix() - (days * 86400)
-  
-  -- Only create backup if one doesn't exist for this session or if it's old
-  if not db.events_backup or not db.events_backup_time or (GetUnix() - db.events_backup_time) > 3600 then
-    db.events_backup = CopyEventsSnapshot()
-    db.events_backup_time = GetUnix()
+  local now = GetUnix()
+  local cutoff = now - (days * 86400)
+
+  if TimeLoggerStorage:ShouldRefreshBackup(now) then
+    TimeLoggerStorage:WriteEventsBackup(TimeLoggerStorage:CopyEventsSnapshot(), now)
   end
-  
-  local kept = {}
-  for i = 1, #db.events do
-    local e = db.events[i]
-    if (e.unix or 0) >= cutoff then
-      kept[#kept + 1] = e
-    end
-  end
-  db.events = kept
+
+  local keptCount = TimeLoggerStorage:PruneBefore(cutoff)
   print(
     string.format(
       "|cff00ff00TimeLogger:|r Pruned events older than %d days. Kept %d rows; full pre-prune snapshot in events_backup (%d rows).",
       days,
-      #db.events,
-      #db.events_backup
+      keptCount,
+      TimeLoggerStorage:GetBackupRowCount()
     )
   )
 end
@@ -438,30 +350,17 @@ end
 local function SaveCurrentPlayedFromEventsFallback()
   EnsureDB()
   local key = CurrentCharKey()
-  local total = 0
-  local openStart
-  local char = UnitName("player") or ""
-  local realm = GetRealmName() or ""
-  for i = 1, #db.events do
-    local e = db.events[i]
-    if e.character == char and e.realm == realm then
-      if e.event == "login" then
-        openStart = e.unix or 0
-      elseif e.event == "logout" then
-        local endUnix = e.unix or 0
-        if openStart and endUnix > openStart then
-          total = total + (endUnix - openStart)
-        end
-        openStart = nil
-      end
-    end
+  if TimeLoggerStorage:GetPlayedTotal(key) then
+    return
   end
-  local now = GetUnix()
-  if openStart and now > openStart then
-    total = total + (now - openStart)
-  end
-  if total > 0 and not db.played_totals[key] then
-    db.played_totals[key] = math.floor(total)
+
+  local total = TimeLoggerStorage:SumCharacterPlaytimeFromEvents(
+    UnitName("player") or "",
+    GetRealmName() or "",
+    GetUnix()
+  )
+  if total > 0 then
+    TimeLoggerStorage:SetPlayedTotal(key, math.floor(total))
   end
 end
 
@@ -719,7 +618,7 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1)
     StopTempLogoutTicker()
     EnsureDB()
     RequestPlayedTotals(true)
-    db.temp_logout = nil
+    TimeLoggerStorage:ClearTempLogout()
     Record("logout")
   elseif event == "TIME_PLAYED_MSG" then
     local totalTime = tonumber(arg1)
