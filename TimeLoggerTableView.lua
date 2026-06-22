@@ -239,6 +239,13 @@ function TableView:Create(parent, name, options)
   local scroll = CreateFrame("ScrollFrame", nil, body, "UIPanelScrollFrameTemplate")
   scroll:SetPoint("TOPLEFT", 0, 0)
   scroll:SetPoint("BOTTOMRIGHT", -24, 0)
+  scroll:EnableMouseWheel(true)
+  scroll:SetScript("OnMouseWheel", function(self, delta)
+    local current = self:GetVerticalScroll() or 0
+    local max = self:GetVerticalScrollRange() or 0
+    local newScroll = math.max(0, math.min(max, current - (delta * 20)))
+    self:SetVerticalScroll(newScroll)
+  end)
   widget.scroll = scroll
 
   if scroll.ScrollBar then

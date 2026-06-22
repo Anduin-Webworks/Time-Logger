@@ -232,8 +232,6 @@ local dataTableView
 local sessionDurationLabel
 local currentCharacterTotalLabel
 local allCharactersTotalLabel
-local exportMode = "events_csv"
-local modeButtons = {}
 
 local UI_COLORS = {
   frameBg = { 0.05, 0.05, 0.06, 0.96 },
@@ -392,7 +390,8 @@ local function BuildSessionRows()
 end
 
 local function IsSessionsMode()
-  return exportMode == "sessions_csv" or exportMode == "sessions_json"
+  -- Always show sessions now
+  return true
 end
 
 local function BuildCSVFromEvents(rows)
@@ -505,96 +504,31 @@ local function GetExportRows()
   if dataTableView and dataTableView:HasActiveFilters() then
     return dataTableView:GetFilteredRows()
   end
-  if IsSessionsMode() then
-    return BuildSessionRows()
-  end
-  return BuildEventRows()
+  -- Always return sessions
+  return BuildSessionRows()
 end
 
-local function GetExportText()
+local function GetExportTextAsCSV()
   EnsureDB()
   local rows = GetExportRows()
-  if exportMode == "events_json" then
-    return BuildJSONFromEvents(rows)
-  elseif exportMode == "sessions_csv" then
-    return BuildCSVFromSessions(rows)
-  elseif exportMode == "sessions_json" then
-    return BuildJSONFromSessions(rows)
-  end
-  return BuildCSVFromEvents(rows)
+  return BuildCSVFromSessions(rows)
 end
 
-local function StyleModeButton(button, active)
-  if not button or not button.bg then
-    return
-  end
-  local color = active and UI_COLORS.buttonActive or UI_COLORS.buttonInactive
-  button.bg:SetColorTexture(color[1], color[2], color[3], color[4] or 1)
-  if active then
-    button:SetBackdropBorderColor(0.78, 0.62, 0.18, 0.95)
-  else
-    button:SetBackdropBorderColor(0.45, 0.45, 0.48, 0.65)
-  end
+local function GetExportTextAsJSON()
+  EnsureDB()
+  local rows = GetExportRows()
+  return BuildJSONFromSessions(rows)
 end
 
-local function RefreshModeButtons()
-  for mode, button in pairs(modeButtons) do
-    StyleModeButton(button, mode == exportMode)
-  end
-end
+-- Mode button functions removed - no longer needed (single Sessions view only)
 
 local function RefreshTableView()
   if not dataTableView then
     return
   end
-  if IsSessionsMode() then
-    dataTableView:SetColumns(GetSessionColumns())
-    dataTableView:SetRows(BuildSessionRows())
-  else
-    dataTableView:SetColumns(GetEventColumns())
-    dataTableView:SetRows(BuildEventRows())
-  end
-end
-
-local function SetExportMode(mode)
-  exportMode = mode
-  RefreshModeButtons()
-  RefreshTableView()
-end
-
-local function CreateModeButton(parent, label, mode)
-  local button = CreateFrame("Button", nil, parent, "BackdropTemplate")
-  button:SetSize(104, 24)
-  button:SetBackdrop({
-    bgFile = "Interface\\Buttons\\WHITE8x8",
-    edgeFile = "Interface\\Buttons\\WHITE8x8",
-    tile = false,
-    edgeSize = 1,
-    insets = { left = 1, right = 1, top = 1, bottom = 1 },
-  })
-
-  local bg = button:CreateTexture(nil, "BACKGROUND")
-  bg:SetAllPoints()
-  button.bg = bg
-
-  local text = button:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-  text:SetPoint("CENTER")
-  text:SetText(label)
-  text:SetTextColor(0.82, 0.82, 0.86, 1)
-  button.label = text
-
-  button:SetScript("OnEnter", function(self)
-    self.label:SetTextColor(0.95, 0.78, 0.28, 1)
-  end)
-  button:SetScript("OnLeave", function(self)
-    self.label:SetTextColor(0.82, 0.82, 0.86, 1)
-  end)
-  button:SetScript("OnClick", function()
-    SetExportMode(mode)
-  end)
-
-  modeButtons[mode] = button
-  return button
+  -- Always show sessions view
+  dataTableView:SetColumns(GetSessionColumns())
+  dataTableView:SetRows(BuildSessionRows())
 end
 
 local function RefreshCurrentSessionLabel()
@@ -681,47 +615,100 @@ local function CreateExportUI()
     f:Hide()
   end)
 
-  local evCsv = CreateModeButton(f, TimeLoggerL("BTN_EVENTS_CSV"), "events_csv")
-  evCsv:SetPoint("TOPLEFT", 20, -78)
+  -- Export buttons header label
+  local exportLabel = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  exportLabel:SetPoint("TOPLEFT", 20, -78)
+  exportLabel:SetText("Export Sessions:")
+  exportLabel:SetTextColor(UI_COLORS.subtitle[1], UI_COLORS.subtitle[2], UI_COLORS.subtitle[3], 1)
 
-  local evJson = CreateModeButton(f, TimeLoggerL("BTN_EVENTS_JSON"), "events_json")
-  evJson:SetSize(104, 24)
-  evJson:SetPoint("LEFT", evCsv, "RIGHT", 8, 0)
-
-  local sessCsv = CreateModeButton(f, TimeLoggerL("BTN_SESSIONS_CSV"), "sessions_csv")
-  sessCsv:SetSize(112, 24)
-  sessCsv:SetPoint("LEFT", evJson, "RIGHT", 8, 0)
-
-  local sessJson = CreateModeButton(f, TimeLoggerL("BTN_SESSIONS_JSON"), "sessions_json")
-  sessJson:SetSize(112, 24)
-  sessJson:SetPoint("LEFT", sessCsv, "RIGHT", 8, 0)
-
-  local copyBtn = CreateFrame("Button", nil, f, "BackdropTemplate")
-  copyBtn:SetSize(140, 24)
-  copyBtn:SetPoint("TOPRIGHT", -36, -78)
-  copyBtn:SetBackdrop({
+  -- Export as CSV button
+  local exportCsvBtn = CreateFrame("Button", nil, f, "BackdropTemplate")
+  exportCsvBtn:SetSize(120, 24)
+  exportCsvBtn:SetPoint("LEFT", exportLabel, "RIGHT", 12, 0)
+  exportCsvBtn:SetBackdrop({
     bgFile = "Interface\\Buttons\\WHITE8x8",
     edgeFile = "Interface\\Buttons\\WHITE8x8",
     tile = false,
     edgeSize = 1,
     insets = { left = 1, right = 1, top = 1, bottom = 1 },
   })
-  copyBtn:SetBackdropColor(0.14, 0.12, 0.08, 1)
-  copyBtn:SetBackdropBorderColor(0.78, 0.62, 0.18, 0.95)
-  local copyLabel = copyBtn:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-  copyLabel:SetPoint("CENTER")
-  copyLabel:SetText(TimeLoggerL("BTN_COPY"))
-  copyLabel:SetTextColor(0.95, 0.78, 0.28, 1)
-  copyBtn:SetScript("OnEnter", function()
-    copyBtn:SetBackdropColor(0.20, 0.16, 0.10, 1)
+  exportCsvBtn:SetBackdropColor(0.14, 0.12, 0.08, 1)
+  exportCsvBtn:SetBackdropBorderColor(0.78, 0.62, 0.18, 0.95)
+  local exportCsvLabel = exportCsvBtn:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  exportCsvLabel:SetPoint("CENTER")
+  exportCsvLabel:SetText("Export as CSV")
+  exportCsvLabel:SetTextColor(0.95, 0.78, 0.28, 1)
+  exportCsvBtn:SetScript("OnEnter", function()
+    exportCsvBtn:SetBackdropColor(0.20, 0.16, 0.10, 1)
   end)
-  copyBtn:SetScript("OnLeave", function()
-    copyBtn:SetBackdropColor(0.14, 0.12, 0.08, 1)
+  exportCsvBtn:SetScript("OnLeave", function()
+    exportCsvBtn:SetBackdropColor(0.14, 0.12, 0.08, 1)
   end)
-  copyBtn:SetScript("OnClick", function()
-    local text = GetExportText()
-    if C_ChatInfo and C_ChatInfo.CopyStringToClipboard then
-      C_ChatInfo.CopyStringToClipboard(text)
+  exportCsvBtn:SetScript("OnClick", function()
+    local text = GetExportTextAsCSV()
+    local success = false
+    -- Try C_ChatInfo API first
+    if C_ChatInfo and type(C_ChatInfo.CopyStringToClipboard) == "function" then
+      pcall(function()
+        success = C_ChatInfo.CopyStringToClipboard(text)
+      end)
+    end
+    -- If that didn't work, try opening edit box for manual copy
+    if not success then
+      if ChatFrame1EditBox then
+        ChatFrame1EditBox:SetText(text)
+        ChatFrame1EditBox:HighlightText(0, -1)
+        success = true
+      end
+    end
+    if success then
+      TimeLoggerLocale:Print("MSG_COPIED", #text)
+    else
+      TimeLoggerLocale:PrintWarning("MSG_CLIPBOARD_UNAVAILABLE")
+    end
+  end)
+
+  -- Export as JSON button
+  local exportJsonBtn = CreateFrame("Button", nil, f, "BackdropTemplate")
+  exportJsonBtn:SetSize(120, 24)
+  exportJsonBtn:SetPoint("LEFT", exportCsvBtn, "RIGHT", 12, 0)
+  exportJsonBtn:SetBackdrop({
+    bgFile = "Interface\\Buttons\\WHITE8x8",
+    edgeFile = "Interface\\Buttons\\WHITE8x8",
+    tile = false,
+    edgeSize = 1,
+    insets = { left = 1, right = 1, top = 1, bottom = 1 },
+  })
+  exportJsonBtn:SetBackdropColor(0.14, 0.12, 0.08, 1)
+  exportJsonBtn:SetBackdropBorderColor(0.78, 0.62, 0.18, 0.95)
+  local exportJsonLabel = exportJsonBtn:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  exportJsonLabel:SetPoint("CENTER")
+  exportJsonLabel:SetText("Export as JSON")
+  exportJsonLabel:SetTextColor(0.95, 0.78, 0.28, 1)
+  exportJsonBtn:SetScript("OnEnter", function()
+    exportJsonBtn:SetBackdropColor(0.20, 0.16, 0.10, 1)
+  end)
+  exportJsonBtn:SetScript("OnLeave", function()
+    exportJsonBtn:SetBackdropColor(0.14, 0.12, 0.08, 1)
+  end)
+  exportJsonBtn:SetScript("OnClick", function()
+    local text = GetExportTextAsJSON()
+    local success = false
+    -- Try C_ChatInfo API first
+    if C_ChatInfo and type(C_ChatInfo.CopyStringToClipboard) == "function" then
+      pcall(function()
+        success = C_ChatInfo.CopyStringToClipboard(text)
+      end)
+    end
+    -- If that didn't work, try opening edit box for manual copy
+    if not success then
+      if ChatFrame1EditBox then
+        ChatFrame1EditBox:SetText(text)
+        ChatFrame1EditBox:HighlightText(0, -1)
+        success = true
+      end
+    end
+    if success then
       TimeLoggerLocale:Print("MSG_COPIED", #text)
     else
       TimeLoggerLocale:PrintWarning("MSG_CLIPBOARD_UNAVAILABLE")
@@ -730,7 +717,7 @@ local function CreateExportUI()
 
   local minimapCheck = CreateFrame("CheckButton", nil, f, "UICheckButtonTemplate")
   minimapCheck:SetSize(24, 24)
-  minimapCheck:SetPoint("RIGHT", copyBtn, "LEFT", -10, 0)
+  minimapCheck:SetPoint("TOPRIGHT", -20, -76)
   minimapCheck:SetChecked(TimeLoggerMinimap:IsEnabled())
   minimapCheck:SetScript("OnClick", function(self)
     TimeLoggerMinimap:SetEnabled(self:GetChecked())
@@ -828,7 +815,6 @@ local function CreateExportUI()
       self:Hide()
     end
   end)
-  RefreshModeButtons()
   f.sessionRefreshElapsed = 0
   f:SetScript("OnUpdate", function(self, elapsed)
     self.sessionRefreshElapsed = (self.sessionRefreshElapsed or 0) + elapsed

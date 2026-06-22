@@ -4,7 +4,7 @@ TimeLoggerLocale:LoadBase({
   ADDON_TAG = "TimeLogger",
 
   UI_TITLE = "TimeLogger Export",
-  UI_SUBTITLE = "Events and sessions in CSV/JSON",
+  UI_SUBTITLE = "Gaming sessions in CSV/JSON format",
   UI_SESSION_LABEL = "Current Session Duration: %s",
   UI_SESSION_NA = "N/A",
 
