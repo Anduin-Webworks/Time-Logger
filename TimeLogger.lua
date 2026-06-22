@@ -1,8 +1,3 @@
---[[
-  TimeLogger — login/logout events, session export, prune, and temp_logout heartbeat for crash recovery.
-  Commands: /timelogger, /tlog
-]]
-
 local ADDON_NAME = ...
 
 local HEARTBEAT_SEC = 300 -- 5 minutes
@@ -365,9 +360,10 @@ end
 local function BuildSessionRows()
   local rows = {}
   local sessions = TimeLoggerStorage:BuildSessions(false)
-  for i, session in ipairs(sessions) do
+  for i = #sessions, 1, -1 do
+    local session = sessions[i]
     rows[#rows + 1] = {
-      id = i,
+      id = #rows + 1,
       start_unix = session.start_unix or 0,
       start_utc = session.start_utc or "",
       start_local_dt = session.start_local_dt or "",
@@ -806,7 +802,7 @@ local function CreateExportUI()
     colors = TimeLoggerTableView.DEFAULT_COLORS,
   })
   dataTableView:SetPoint("TOPLEFT", 16, -112)
-  dataTableView:SetPoint("BOTTOMRIGHT", -16, 78)
+  dataTableView:SetPoint("BOTTOMRIGHT", -16, 80)
 
   exportFrame = f
   f:EnableKeyboard(true)

@@ -238,15 +238,55 @@ function TableView:Create(parent, name, options)
 
   local scroll = CreateFrame("ScrollFrame", nil, body, "UIPanelScrollFrameTemplate")
   scroll:SetPoint("TOPLEFT", 0, 0)
-  scroll:SetPoint("BOTTOMRIGHT", -24, 0)
+  scroll:SetPoint("BOTTOMRIGHT", -24, 18)
   scroll:EnableMouseWheel(true)
   scroll:SetScript("OnMouseWheel", function(self, delta)
-    local current = self:GetVerticalScroll() or 0
-    local max = self:GetVerticalScrollRange() or 0
-    local newScroll = math.max(0, math.min(max, current - (delta * 20)))
-    self:SetVerticalScroll(newScroll)
+    local vertical = not IsShiftKeyDown()
+    if vertical then
+      local current = self:GetVerticalScroll() or 0
+      local max = self:GetVerticalScrollRange() or 0
+      local newScroll = math.max(0, math.min(max, current - (delta * 20)))
+      self:SetVerticalScroll(newScroll)
+    else
+      local current = self:GetHorizontalScroll() or 0
+      local max = self:GetHorizontalScrollRange() or 0
+      local newScroll = math.max(0, math.min(max, current - (delta * 20)))
+      self:SetHorizontalScroll(newScroll)
+    end
+  end)
+
+  local hSliderUpdating = false
+  scroll:SetScript("OnVerticalScroll", function(self)
+    widget:UpdateVisibleRows()
+  end)
+  scroll:SetScript("OnHorizontalScroll", function(self)
+    local x = self:GetHorizontalScroll() or 0
+    widget:UpdateHeaderScroll()
+    if widget.hSlider and not hSliderUpdating then
+      hSliderUpdating = true
+      widget.hSlider:SetValue(x)
+      hSliderUpdating = false
+    end
   end)
   widget.scroll = scroll
+
+  local hSlider = CreateFrame("Slider", nil, body, "HorizontalSliderTemplate")
+  hSlider:SetPoint("BOTTOMLEFT", 0, 0)
+  hSlider:SetPoint("BOTTOMRIGHT", -24, 0)
+  hSlider:SetHeight(16)
+  hSlider:SetOrientation("HORIZONTAL")
+  hSlider:SetMinMaxValues(0, 0)
+  hSlider:SetValueStep(1)
+  hSlider:SetObeyStepOnDrag(true)
+  hSlider:SetScript("OnValueChanged", function(self, value, userInput)
+    if hSliderUpdating then
+      return
+    end
+    if widget.scroll and userInput then
+      widget.scroll:SetHorizontalScroll(value)
+    end
+  end)
+  widget.hSlider = hSlider
 
   if scroll.ScrollBar then
     scroll.ScrollBar:GetThumbTexture():SetVertexColor(
@@ -348,6 +388,7 @@ function TableView:Create(parent, name, options)
     self.contentWidth = math.max(totalWidth, 1)
     self.scrollChild:SetWidth(self.contentWidth)
     self.header:SetWidth(self.contentWidth + 16)
+    self.scroll:SetHorizontalScroll(0)
   end
 
   function widget:EnsureRowPool(visibleCount)
@@ -358,6 +399,30 @@ function TableView:Create(parent, name, options)
         self.rowFrames[i] = row
       end
     end
+  end
+
+  function widget:UpdateScrollRanges()
+    local scrollWidth = math.max(self.scroll:GetWidth() or 1, 1)
+    local maxH = math.max(0, self.contentWidth - scrollWidth)
+    if self.hSlider then
+      self.hSlider:SetMinMaxValues(0, maxH)
+      if self.hSlider:GetValue() > maxH then
+        self.hSlider:SetValue(maxH)
+      end
+    end
+
+    if self.scroll.ScrollBar then
+      local maxV = math.max(0, (self.scrollChild:GetHeight() or 1) - (self.scroll:GetHeight() or 1))
+      self.scroll.ScrollBar:SetMinMaxValues(0, maxV)
+      if self.scroll.ScrollBar:GetValue() > maxV then
+        self.scroll.ScrollBar:SetValue(maxV)
+      end
+    end
+  end
+
+  function widget:UpdateHeaderScroll()
+    local x = self.scroll:GetHorizontalScroll() or 0
+    self.header:SetPoint("TOPLEFT", self, "TOPLEFT", -x + 8, -8)
   end
 
   function widget:LayoutRowFrame(row, rowIndex, dataIndex)
@@ -421,6 +486,7 @@ function TableView:Create(parent, name, options)
     end
 
     self.scrollChild:SetHeight(math.max(totalRows * self.rowHeight, 1))
+    self:UpdateScrollRanges()
     self:UpdateStatusText()
   end
 
@@ -458,6 +524,11 @@ function TableView:Create(parent, name, options)
     end
 
     self.scroll:SetVerticalScroll(0)
+    self.scroll:SetHorizontalScroll(0)
+    if self.hSlider then
+      self.hSlider:SetValue(0)
+    end
+    self:UpdateHeaderScroll()
     self:UpdateVisibleRows()
 
     if self.onFiltersChanged then
@@ -498,6 +569,7 @@ function TableView:Create(parent, name, options)
   function widget:SetRows(rows)
     self.allRows = rows or {}
     self:ApplyFilters()
+    self:UpdateVisibleRows()
   end
 
   function widget:Refresh()
