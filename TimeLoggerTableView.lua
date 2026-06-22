@@ -270,19 +270,37 @@ function TableView:Create(parent, name, options)
   end)
   widget.scroll = scroll
 
-  local hSlider = CreateFrame("Slider", nil, body, "HorizontalSliderTemplate")
+  local hSlider
+  do
+    local ok, tmp = pcall(CreateFrame, "Slider", nil, body, "HorizontalSliderTemplate")
+    if ok and tmp then
+      hSlider = tmp
+    else
+      -- Fallback: create a slider without inherited template when the template
+      -- node is unavailable in the current UI environment.
+      hSlider = CreateFrame("Slider", nil, body)
+    end
+  end
   hSlider:SetPoint("BOTTOMLEFT", 0, 0)
   hSlider:SetPoint("BOTTOMRIGHT", -24, 0)
   hSlider:SetHeight(16)
-  hSlider:SetOrientation("HORIZONTAL")
-  hSlider:SetMinMaxValues(0, 0)
-  hSlider:SetValueStep(1)
-  hSlider:SetObeyStepOnDrag(true)
+  if hSlider.SetOrientation then
+    hSlider:SetOrientation("HORIZONTAL")
+  end
+  if hSlider.SetMinMaxValues then
+    hSlider:SetMinMaxValues(0, 0)
+  end
+  if hSlider.SetValueStep then
+    hSlider:SetValueStep(1)
+  end
+  if hSlider.SetObeyStepOnDrag then
+    hSlider:SetObeyStepOnDrag(true)
+  end
   hSlider:SetScript("OnValueChanged", function(self, value, userInput)
     if hSliderUpdating then
       return
     end
-    if widget.scroll and userInput then
+    if widget.scroll and userInput and widget.scroll.SetHorizontalScroll then
       widget.scroll:SetHorizontalScroll(value)
     end
   end)
