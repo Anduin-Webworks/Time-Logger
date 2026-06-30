@@ -59,6 +59,17 @@ local function BuildEventFields(kind, unix, extra)
       fields[key] = value
     end
   end
+
+  -- Persist subscription active boolean at the exact moment of the event.
+  local subExpiresUnix = 0
+  if TimeLoggerStorage and type(TimeLoggerStorage.GetDB) == "function" then
+    local db = TimeLoggerStorage:GetDB()
+    if db and db.subExpiresUnix then
+      subExpiresUnix = db.subExpiresUnix
+    end
+  end
+  fields.subActive = (unix <= subExpiresUnix)
+
   return fields
 end
 
@@ -265,14 +276,6 @@ local function GetEventColumns()
     { key = "patch", title = TimeLoggerL("COL_PATCH"), width = 56 },
     { key = "expansion", title = TimeLoggerL("COL_EXPANSION"), width = 100 },
     {
-      key = "subscription",
-      title = TimeLoggerL("COL_SUBSCRIPTION"),
-      width = 88,
-      getValue = function(row)
-        return TimeLoggerLocale:FormatSubscription(row.subscription)
-      end,
-    },
-    {
       key = "recovery",
       title = TimeLoggerL("COL_RECOVERY"),
       width = 60,
@@ -316,11 +319,12 @@ local function GetSessionColumns()
       end,
     },
     {
-      key = "subscription",
-      title = TimeLoggerL("COL_SUBSCRIPTION"),
+      key = "subActive",
+      title = TimeLoggerL("COL_SUB_ACTIVE"),
       width = 84,
       getValue = function(row)
-        return TimeLoggerLocale:FormatSubscription(row.subscription)
+        if row.subActive == nil then return "" end
+        return row.subActive and TimeLoggerL("VAL_TRUE") or TimeLoggerL("VAL_FALSE")
       end,
     },
     { key = "character", title = TimeLoggerL("COL_CHARACTER"), width = 88 },
@@ -352,6 +356,7 @@ local function BuildEventRows()
       expansion = event.expansion or "",
       subscription = event.subscription or "",
       recovery = event.recovery,
+      subActive = event.subActive,
     }
   end)
   return rows
@@ -377,6 +382,7 @@ local function BuildSessionRows()
       end_location = session.end_location or "",
       weekday = session.weekday,
       subscription = session.subscription or "",
+      subActive = session.subActive,
       character = session.character or "",
       realm = session.realm or "",
       status = session.status or "",
@@ -392,11 +398,11 @@ end
 
 local function BuildCSVFromEvents(rows)
   local lines = {
-    "unix,utc_iso,local_dt,weekday,event,character,realm,location,patch,expansion,subscription,recovery",
+    "unix,utc_iso,local_dt,weekday,event,character,realm,location,patch,expansion,subscription,subActive,recovery",
   }
   for _, event in ipairs(rows) do
     table.insert(lines, string.format(
-      "%d,%s,%s,%d,%s,%s,%s,%s,%s,%s,%s,%d",
+      "%d,%s,%s,%d,%s,%s,%s,%s,%s,%s,%s,%d,%d",
       event.unix or 0,
       CsvEscape(event.utc),
       CsvEscape(event.local_dt),
@@ -408,6 +414,7 @@ local function BuildCSVFromEvents(rows)
       CsvEscape(event.patch),
       CsvEscape(event.expansion),
       CsvEscape(event.subscription),
+      event.subActive and 1 or 0,
       event.recovery and 1 or 0))
   end
   return table.concat(lines, "\n")
@@ -419,7 +426,7 @@ local function BuildJSONFromEvents(rows)
   for i, event in ipairs(rows) do
     local rec = event.recovery and ',"recovery":true' or ""
     local chunk = string.format(
-      '{"unix":%d,"utc":"%s","local_dt":"%s","weekday":%d,"event":"%s","character":"%s","realm":"%s","location":"%s","patch":"%s","expansion":"%s","subscription":"%s"%s}',
+      '{"unix":%d,"utc":"%s","local_dt":"%s","weekday":%d,"event":"%s","character":"%s","realm":"%s","location":"%s","patch":"%s","expansion":"%s","subscription":"%s","subActive":%s%s}',
       event.unix or 0,
       JsonEscape(event.utc),
       JsonEscape(event.local_dt),
@@ -431,6 +438,7 @@ local function BuildJSONFromEvents(rows)
       JsonEscape(event.patch),
       JsonEscape(event.expansion),
       JsonEscape(event.subscription),
+      event.subActive and "true" or "false",
       rec
     )
     if i < n then
@@ -444,11 +452,11 @@ end
 
 local function BuildCSVFromSessions(rows)
   local lines = {
-    "session_id,start_unix,start_utc,start_local_dt,end_unix,end_utc,end_local_dt,duration_sec,patch,expansion,start_location,end_location,weekday,subscription,character,realm,status",
+    "session_id,start_unix,start_utc,start_local_dt,end_unix,end_utc,end_local_dt,duration_sec,patch,expansion,start_location,end_location,weekday,subscription,subActive,character,realm,status",
   }
   for _, session in ipairs(rows) do
     table.insert(lines, string.format(
-      "%d,%d,%s,%s,%d,%s,%s,%d,%s,%s,%s,%s,%d,%s,%s,%s,%s",
+      "%d,%d,%s,%s,%d,%s,%s,%d,%s,%s,%s,%s,%d,%s,%d,%s,%s,%s",
       session.id or 0,
       session.start_unix or 0,
       CsvEscape(session.start_utc),
@@ -463,6 +471,7 @@ local function BuildCSVFromSessions(rows)
       CsvEscape(session.end_location),
       session.weekday or 0,
       CsvEscape(session.subscription),
+      session.subActive and 1 or 0,
       CsvEscape(session.character),
       CsvEscape(session.realm),
       CsvEscape(session.status)))
@@ -474,7 +483,7 @@ local function BuildJSONFromSessions(rows)
   local lines = {}
   for _, session in ipairs(rows) do
     table.insert(lines, string.format(
-      '  {"id":%d,"start_unix":%d,"start_utc":"%s","start_local_dt":"%s","end_unix":%d,"end_utc":"%s","end_local_dt":"%s","duration":%d,"patch":"%s","expansion":"%s","start_location":"%s","end_location":"%s","weekday":%d,"subscription":"%s","char":"%s","realm":"%s","status":"%s"}',
+      '  {"id":%d,"start_unix":%d,"start_utc":"%s","start_local_dt":"%s","end_unix":%d,"end_utc":"%s","end_local_dt":"%s","duration":%d,"patch":"%s","expansion":"%s","start_location":"%s","end_location":"%s","weekday":%d,"subscription":"%s","subActive":%s,"char":"%s","realm":"%s","status":"%s"}',
       session.id or 0,
       session.start_unix or 0,
       JsonEscape(session.start_utc),
@@ -489,6 +498,7 @@ local function BuildJSONFromSessions(rows)
       JsonEscape(session.end_location),
       session.weekday or 0,
       JsonEscape(session.subscription),
+      session.subActive and "true" or "false",
       JsonEscape(session.character),
       JsonEscape(session.realm),
       JsonEscape(session.status)))
@@ -514,6 +524,97 @@ local function GetExportTextAsJSON()
   EnsureDB()
   local rows = GetExportRows()
   return BuildJSONFromSessions(rows)
+end
+
+-- Show a large popup with a selectable edit box so the user can manually copy exported text.
+local function ShowExportTextPopup(text, title)
+  title = title or TimeLoggerL("UI_TITLE")
+  if not TimeLoggerClipboardPopup then
+    local f = CreateFrame("Frame", "TimeLoggerClipboardPopup", UIParent, "BackdropTemplate")
+    f:SetSize(900, 520)
+    f:SetPoint("CENTER")
+    f:SetFrameStrata("FULLSCREEN_DIALOG")
+    f:SetFrameLevel(200)
+    f:SetMovable(true)
+    f:EnableMouse(true)
+    f:RegisterForDrag("LeftButton")
+    f:SetScript("OnDragStart", f.StartMoving)
+    f:SetScript("OnDragStop", f.StopMovingOrSizing)
+    f:SetBackdrop({
+      bgFile = "Interface\\Buttons\\WHITE8x8",
+      edgeFile = "Interface\\Buttons\\WHITE8x8",
+      tile = false,
+      edgeSize = 1,
+      insets = { left = 1, right = 1, top = 1, bottom = 1 },
+    })
+    f:SetBackdropColor(UI_COLORS.frameBg[1], UI_COLORS.frameBg[2], UI_COLORS.frameBg[3], UI_COLORS.frameBg[4])
+    f:SetBackdropBorderColor(UI_COLORS.frameBorder[1], UI_COLORS.frameBorder[2], UI_COLORS.frameBorder[3], UI_COLORS.frameBorder[4])
+
+    local titleText = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    titleText:SetPoint("TOPLEFT", 12, -10)
+    titleText:SetJustifyH("LEFT")
+    f.titleText = titleText
+
+    local scroll = CreateFrame("ScrollFrame", "TimeLoggerClipboardScrollFrame", f, "UIPanelScrollFrameTemplate")
+    scroll:SetPoint("TOPLEFT", 12, -40)
+    scroll:SetPoint("BOTTOMRIGHT", -28, 40)
+
+    local eb = CreateFrame("EditBox", nil, scroll)
+    eb:SetWidth(840)
+    eb:SetHeight(420)
+    eb:SetMultiLine(true)
+    eb:EnableMouse(true)
+    eb:SetAutoFocus(false)
+    eb:SetFontObject(GameFontNormal)
+    eb:SetScript("OnEscapePressed", function()
+      f:Hide()
+    end)
+    scroll:SetScrollChild(eb)
+    f.editBox = eb
+
+    local selectBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    selectBtn:SetSize(110, 22)
+    selectBtn:SetPoint("BOTTOMLEFT", 12, 8)
+    selectBtn:SetText(TimeLoggerL("BTN_SELECT_ALL") or "Select All")
+    selectBtn:SetScript("OnClick", function()
+      eb:HighlightText(0, -1)
+      eb:SetFocus()
+    end)
+
+    local copyBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    copyBtn:SetSize(140, 22)
+    copyBtn:SetPoint("LEFT", selectBtn, "RIGHT", 8, 0)
+    copyBtn:SetText(TimeLoggerL("BTN_COPY_CLIPBOARD") or "Copy to Clipboard")
+    copyBtn:SetScript("OnClick", function()
+      if C_ChatInfo and type(C_ChatInfo.CopyStringToClipboard) == "function" then
+        local ok = pcall(function() C_ChatInfo.CopyStringToClipboard(eb:GetText()) end)
+        if ok then
+          TimeLoggerLocale:Print("MSG_COPIED", #(eb:GetText() or ""))
+        else
+          TimeLoggerLocale:PrintWarning("MSG_CLIPBOARD_UNAVAILABLE")
+        end
+      else
+        TimeLoggerLocale:PrintWarning("MSG_CLIPBOARD_UNAVAILABLE")
+      end
+    end)
+
+    local closeBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    closeBtn:SetSize(80, 22)
+    closeBtn:SetPoint("BOTTOMRIGHT", -12, 8)
+    closeBtn:SetText(CLOSE)
+    closeBtn:SetScript("OnClick", function()
+      f:Hide()
+    end)
+
+    TimeLoggerClipboardPopup = f
+  end
+
+  TimeLoggerClipboardPopup.titleText:SetText(title)
+  TimeLoggerClipboardPopup.editBox:SetText(text or "")
+  TimeLoggerClipboardPopup.editBox:HighlightText(0, -1)
+  TimeLoggerClipboardPopup:Show()
+  TimeLoggerClipboardPopup:Raise()
+  TimeLoggerClipboardPopup.editBox:SetFocus()
 end
 
 -- Mode button functions removed - no longer needed (single Sessions view only)
@@ -642,26 +743,7 @@ local function CreateExportUI()
   end)
   exportCsvBtn:SetScript("OnClick", function()
     local text = GetExportTextAsCSV()
-    local success = false
-    -- Try C_ChatInfo API first
-    if C_ChatInfo and type(C_ChatInfo.CopyStringToClipboard) == "function" then
-      pcall(function()
-        success = C_ChatInfo.CopyStringToClipboard(text)
-      end)
-    end
-    -- If that didn't work, try opening edit box for manual copy
-    if not success then
-      if ChatFrame1EditBox then
-        ChatFrame1EditBox:SetText(text)
-        ChatFrame1EditBox:HighlightText(0, -1)
-        success = true
-      end
-    end
-    if success then
-      TimeLoggerLocale:Print("MSG_COPIED", #text)
-    else
-      TimeLoggerLocale:PrintWarning("MSG_CLIPBOARD_UNAVAILABLE")
-    end
+    ShowExportTextPopup(text, TimeLoggerL("UI_EXPORT_CSV") or "Export Sessions (CSV)")
   end)
 
   -- Export as JSON button
@@ -689,26 +771,7 @@ local function CreateExportUI()
   end)
   exportJsonBtn:SetScript("OnClick", function()
     local text = GetExportTextAsJSON()
-    local success = false
-    -- Try C_ChatInfo API first
-    if C_ChatInfo and type(C_ChatInfo.CopyStringToClipboard) == "function" then
-      pcall(function()
-        success = C_ChatInfo.CopyStringToClipboard(text)
-      end)
-    end
-    -- If that didn't work, try opening edit box for manual copy
-    if not success then
-      if ChatFrame1EditBox then
-        ChatFrame1EditBox:SetText(text)
-        ChatFrame1EditBox:HighlightText(0, -1)
-        success = true
-      end
-    end
-    if success then
-      TimeLoggerLocale:Print("MSG_COPIED", #text)
-    else
-      TimeLoggerLocale:PrintWarning("MSG_CLIPBOARD_UNAVAILABLE")
-    end
+    ShowExportTextPopup(text, TimeLoggerL("UI_EXPORT_JSON") or "Export Sessions (JSON)")
   end)
 
   local minimapCheck = CreateFrame("CheckButton", nil, f, "UICheckButtonTemplate")
@@ -913,6 +976,32 @@ end)
 
 SLASH_TIMELOGGER1 = "/timelogger"
 SLASH_TIMELOGGER2 = "/tlog"
-SlashCmdList["TIMELOGGER"] = function()
-  ShowExport()
+SLASH_TIMELOGGER3 = "/tl"
+SlashCmdList["TIMELOGGER"] = function(msg)
+  msg = msg or ""
+  msg = strtrim(msg)
+  if msg == "" then
+    ShowExport()
+    return
+  end
+  local cmd, arg = strsplit(" ", msg, 2)
+  cmd = (cmd or ""):lower()
+  if cmd == "sub" and tonumber(arg) then
+    local days = tonumber(arg)
+    local currentUnix = GetUnix()
+    local db
+    if TimeLoggerStorage and type(TimeLoggerStorage.GetDB) == "function" then
+      db = TimeLoggerStorage:GetDB()
+    end
+    if db then
+      db.subExpiresUnix = currentUnix + (days * 86400)
+      print("|cffFFD700TimeLogger:|r Subscription expiration updated to " .. days .. " days from now.")
+    else
+      print("|cffFFD700TimeLogger:|r Could not access storage to set subscription expiration.")
+    end
+    return
+  end
+
+  print("TimeLogger Commands:")
+  print("/tl sub <days> - Sets your subscription expiration (e.g., /tl sub 30)")
 end

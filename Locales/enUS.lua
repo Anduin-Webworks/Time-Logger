@@ -47,6 +47,7 @@ TimeLoggerLocale:LoadBase({
   COL_LOCATION = "Location",
   COL_WEEKDAY = "Weekday",
   COL_SUBSCRIPTION = "Subscription",
+  COL_SUB_ACTIVE = "Subscription Active",
   COL_LOCAL_DT = "Local Time",
   COL_START_LOCATION = "Login Location",
   COL_END_LOCATION = "Logout Location",
@@ -68,6 +69,8 @@ TimeLoggerLocale:LoadBase({
   SUB_UNKNOWN = "Unknown",
 
   VAL_YES = "yes",
+  VAL_TRUE = "true",
+  VAL_FALSE = "false",
   EVENT_LOGIN = "login",
   EVENT_LOGOUT = "logout",
   STATUS_OPEN = "open",

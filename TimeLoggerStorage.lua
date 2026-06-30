@@ -25,6 +25,7 @@ local EVENT_FIELD_KEYS = {
   "location",
   "weekday",
   "subscription",
+  "subActive",
   "local_dt",
 }
 
@@ -265,6 +266,7 @@ function Storage:BuildSessions(forceRebuild)
           start_location = event.location,
           weekday = event.weekday,
           subscription = event.subscription,
+          subActive = event.subActive,
           start_local_dt = event.local_dt,
         })
         openSessions[key] = #sessions
