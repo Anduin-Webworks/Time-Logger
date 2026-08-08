@@ -7,7 +7,7 @@ Retail WoW addon that records **login** and **logout** times, enriches each even
 - Automatic **login/logout** logging with crash recovery via heartbeat snapshots
 - **Indexed storage** designed for thousands of rows without performance issues
 - **Table view** with per-column header filters (Excel-style)
-- **CSV/JSON export** for raw events and derived sessions (copy to clipboard)
+- **CSV/JSON export** for derived sessions with filter-aware copy to clipboard
 - **Context capture** on each event: patch version, expansion, location, weekday, subscription status, local datetime
 - **Localization** for all native WoW client languages
 - **Minimap button** (optional) to toggle the window; draggable around the minimap
@@ -41,11 +41,24 @@ The **minimap button** (when enabled) **toggles** the window open and closed. Sl
 
 The UI uses a gold / silver / black theme:
 
-- **Header** — title, current session duration, mode buttons (Events/Sessions × CSV/JSON), minimap toggle, copy to clipboard
-- **Table** — scrollable, filterable data grid (virtualized rows for performance)
+- **Header** — title, current session duration, **Sessions CSV** / **Sessions JSON** buttons, minimap toggle
+- **Table** — scrollable, filterable **sessions** grid (virtualized rows for performance)
 - **Footer** — prune controls and per-character / account playtime summary
 
-Filter boxes sit under each column header. Type to filter; multiple columns combine with AND logic. **Copy to clipboard** exports the current format; if filters are active, only visible rows are copied.
+The table always shows **derived sessions** (not raw login/logout events). Raw events remain in SavedVariables and are documented under [Export formats](#export-formats) for reference.
+
+### Filtering
+
+Filter boxes sit under each column header. Type to filter; multiple columns combine with AND logic. When filters are active, exports include **only the visible rows** shown in the table.
+
+### Export workflow
+
+1. Click **Sessions CSV** or **Sessions JSON** in the header.
+2. A popup opens with the export text in a scrollable, selectable edit box (text is pre-selected).
+3. Click **Copy to clipboard** to copy via the WoW clipboard API, or **Select all** and copy manually (`Ctrl+C`).
+4. If clipboard copy is unavailable on your client, the addon selects all text automatically and shows a chat warning so you can copy by hand.
+
+Export button labels and popup controls are fully localized.
 
 ## Raw events
 
@@ -133,6 +146,8 @@ Events older than N days are removed. The full current list is copied to **`even
 
 Technical English field names and raw stored values are used in exports so spreadsheets and scripts stay consistent. The in-game table localizes labels and display values.
 
+The export window currently produces **session** CSV/JSON only. **Event** formats below describe the raw stored login/logout records in SavedVariables.
+
 ### Events CSV
 
 `unix,utc_iso,local_dt,weekday,event,character,realm,location,patch,expansion,subscription,recovery`
@@ -153,7 +168,7 @@ Array of objects with matching fields (`char` instead of `character` in JSON for
 
 Supported locales: **deDE**, **enUS** (also **enGB**), **esES**, **esMX**, **frFR**, **itIT**, **koKR**, **ptBR**, **ruRU**, **zhCN**, **zhTW**.
 
-UI strings, column headers, weekdays, subscription labels, and chat messages follow the WoW client language. To add or edit translations, update `Locales/enUS.lua` (base) and `Locales/LocaleData.lua` (overlays).
+UI strings, column headers, weekdays, subscription labels, export buttons, and chat messages follow the WoW client language. To add or edit translations, update `Locales/enUS.lua` (base) and `Locales/LocaleData.lua` (overlays).
 
 ## Minimap button
 

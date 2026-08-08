@@ -13,6 +13,7 @@ TimeLoggerLocale:LoadBase({
   BTN_SESSIONS_CSV = "Sessions CSV",
   BTN_SESSIONS_JSON = "Sessions JSON",
   BTN_COPY = "Copy to clipboard",
+  BTN_SELECT_ALL = "Select all",
   BTN_PRUNE = "Prune",
 
   UI_DATA_CLEANUP = "Data cleanup:",

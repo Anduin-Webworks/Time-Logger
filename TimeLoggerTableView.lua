@@ -196,9 +196,15 @@ function TableView:Create(parent, name, options)
   widget.filterDebounceSec = filterDebounceSec
   widget.onFiltersChanged = options.onFiltersChanged
 
-  local header = CreateFrame("Frame", nil, widget)
-  header:SetPoint("TOPLEFT", 8, -8)
-  header:SetPoint("TOPRIGHT", -8, -8)
+  local headerClip = CreateFrame("Frame", nil, widget)
+  headerClip:SetPoint("TOPLEFT", widget, "TOPLEFT", 8, -8)
+  headerClip:SetPoint("TOPRIGHT", widget, "TOPRIGHT", -8, -8)
+  headerClip:SetHeight(headerHeight)
+  headerClip:SetClipsChildren(true)
+  widget.headerClip = headerClip
+
+  local header = CreateFrame("Frame", nil, headerClip)
+  header:SetPoint("TOPLEFT", headerClip, "TOPLEFT", 0, 0)
   header:SetHeight(headerHeight)
   widget.header = header
 
@@ -232,7 +238,7 @@ function TableView:Create(parent, name, options)
   widget.statusText = statusText
 
   local body = CreateFrame("Frame", nil, widget)
-  body:SetPoint("TOPLEFT", header, "BOTTOMLEFT", 0, -2)
+  body:SetPoint("TOPLEFT", headerClip, "BOTTOMLEFT", 0, -2)
   body:SetPoint("BOTTOMRIGHT", status, "TOPRIGHT", 0, 4)
   widget.body = body
 
@@ -252,6 +258,7 @@ function TableView:Create(parent, name, options)
       local max = self:GetHorizontalScrollRange() or 0
       local newScroll = math.max(0, math.min(max, current - (delta * 20)))
       self:SetHorizontalScroll(newScroll)
+      widget:UpdateHeaderScroll()
     end
   end)
 
@@ -302,6 +309,7 @@ function TableView:Create(parent, name, options)
     end
     if widget.scroll and userInput and widget.scroll.SetHorizontalScroll then
       widget.scroll:SetHorizontalScroll(value)
+      widget:UpdateHeaderScroll()
     end
   end)
   widget.hSlider = hSlider
@@ -405,8 +413,9 @@ function TableView:Create(parent, name, options)
 
     self.contentWidth = math.max(totalWidth, 1)
     self.scrollChild:SetWidth(self.contentWidth)
-    self.header:SetWidth(self.contentWidth + 16)
+    self.header:SetWidth(self.contentWidth)
     self.scroll:SetHorizontalScroll(0)
+    self:UpdateHeaderScroll()
   end
 
   function widget:EnsureRowPool(visibleCount)
@@ -440,7 +449,9 @@ function TableView:Create(parent, name, options)
 
   function widget:UpdateHeaderScroll()
     local x = self.scroll:GetHorizontalScroll() or 0
-    self.header:SetPoint("TOPLEFT", self, "TOPLEFT", -x + 8, -8)
+    self.header:ClearAllPoints()
+    self.header:SetPoint("TOPLEFT", self.headerClip, "TOPLEFT", -x, 0)
+    self.header:SetWidth(self.contentWidth)
   end
 
   function widget:LayoutRowFrame(row, rowIndex, dataIndex)

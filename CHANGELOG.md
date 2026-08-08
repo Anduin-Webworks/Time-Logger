@@ -2,6 +2,16 @@
 
 All notable changes to TimeLogger are documented here.
 
+## v2.3.2
+
+### Export UI fixes
+
+- Fixed **Sessions CSV** / **Sessions JSON** buttons not responding to clicks (custom buttons now register mouse input and attach labels correctly)
+- Fixed popup **Copy to clipboard** and **Select all** buttons showing raw locale keys (`BTN_COPY_CLIPBOARD`, `BTN_SELECT_ALL`) instead of translated text
+- Popup button labels now use the correct keys (`BTN_COPY`, `BTN_SELECT_ALL`) and refresh each time the export popup opens
+- **Copy to clipboard** falls back to selecting all text when the WoW clipboard API is unavailable
+- Added `BTN_SELECT_ALL` to `Locales/enUS.lua` and all locale overlays in `Locales/LocaleData.lua`
+
 ## v2.3.1
 
 ### Minimap button
@@ -39,8 +49,8 @@ All notable changes to TimeLogger are documented here.
 
 ### Localization
 
-- Full localization for all native WoW client languages (11 locale codes)
-- UI, table headers, chat messages, weekdays, and subscription labels translated
+- Full localization framework
+- Plans to add all native WoW client languages (11 locale codes, using translation tools)
 - Export formats remain English/technical for compatibility with external tools
 - New files: `TimeLoggerLocale.lua`, `Locales/enUS.lua`, `Locales/LocaleData.lua`
 

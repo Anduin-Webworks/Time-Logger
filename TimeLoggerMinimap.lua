@@ -75,19 +75,15 @@ local function CreateButton()
   button:RegisterForDrag("LeftButton")
   button:SetMovable(true)
 
-  local icon = button:CreateTexture(nil, "BACKGROUND")
-  icon:SetSize(20, 20)
-  icon:SetPoint("CENTER", 0, 1)
+  local icon = button:CreateTexture(nil, "ARTWORK")
+  icon:SetSize(BUTTON_SIZE, BUTTON_SIZE)
+  icon:SetPoint("CENTER", 0, 0)
   icon:SetTexture(ICON_PATH)
   if not icon:GetTexture() then
     icon:SetTexture(FALLBACK_ICON)
+    icon:SetSize(20, 20)
   end
   button.icon = icon
-
-  local border = button:CreateTexture(nil, "OVERLAY")
-  border:SetSize(53, 53)
-  border:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
-  border:SetPoint("TOPLEFT", button, "TOPLEFT", 0, 0)
 
   local dragging = false
 

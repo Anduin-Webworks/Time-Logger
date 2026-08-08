@@ -526,6 +526,49 @@ local function GetExportTextAsJSON()
   return BuildJSONFromSessions(rows)
 end
 
+local function CopyTextToClipboard(text)
+  text = text or ""
+  if C_ChatInfo and type(C_ChatInfo.CopyStringToClipboard) == "function" then
+    local ok = pcall(C_ChatInfo.CopyStringToClipboard, text)
+    if ok then
+      TimeLoggerLocale:Print("MSG_COPIED", #text)
+      return true
+    end
+  end
+  return false
+end
+
+local function CreateGoldButton(parent, width, height, labelText)
+  local btn = CreateFrame("Button", nil, parent, "BackdropTemplate")
+  btn:SetSize(width, height)
+  btn:EnableMouse(true)
+  btn:RegisterForClicks("LeftButtonUp")
+  btn:SetBackdrop({
+    bgFile = "Interface\\Buttons\\WHITE8x8",
+    edgeFile = "Interface\\Buttons\\WHITE8x8",
+    tile = false,
+    edgeSize = 1,
+    insets = { left = 1, right = 1, top = 1, bottom = 1 },
+  })
+  btn:SetBackdropColor(0.14, 0.12, 0.08, 1)
+  btn:SetBackdropBorderColor(0.78, 0.62, 0.18, 0.95)
+
+  local label = btn:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  label:SetPoint("CENTER")
+  label:SetText(labelText)
+  label:SetTextColor(0.95, 0.78, 0.28, 1)
+  btn:SetFontString(label)
+
+  btn:SetScript("OnEnter", function(self)
+    self:SetBackdropColor(0.20, 0.16, 0.10, 1)
+  end)
+  btn:SetScript("OnLeave", function(self)
+    self:SetBackdropColor(0.14, 0.12, 0.08, 1)
+  end)
+
+  return btn
+end
+
 -- Show a large popup with a selectable edit box so the user can manually copy exported text.
 local function ShowExportTextPopup(text, title)
   title = title or TimeLoggerL("UI_TITLE")
@@ -575,28 +618,26 @@ local function ShowExportTextPopup(text, title)
     local selectBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
     selectBtn:SetSize(110, 22)
     selectBtn:SetPoint("BOTTOMLEFT", 12, 8)
-    selectBtn:SetText(TimeLoggerL("BTN_SELECT_ALL") or "Select All")
+    selectBtn:RegisterForClicks("LeftButtonUp")
     selectBtn:SetScript("OnClick", function()
       eb:HighlightText(0, -1)
       eb:SetFocus()
     end)
+    f.selectBtn = selectBtn
 
     local copyBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    copyBtn:SetSize(140, 22)
+    copyBtn:SetSize(180, 22)
     copyBtn:SetPoint("LEFT", selectBtn, "RIGHT", 8, 0)
-    copyBtn:SetText(TimeLoggerL("BTN_COPY_CLIPBOARD") or "Copy to Clipboard")
+    copyBtn:RegisterForClicks("LeftButtonUp")
     copyBtn:SetScript("OnClick", function()
-      if C_ChatInfo and type(C_ChatInfo.CopyStringToClipboard) == "function" then
-        local ok = pcall(function() C_ChatInfo.CopyStringToClipboard(eb:GetText()) end)
-        if ok then
-          TimeLoggerLocale:Print("MSG_COPIED", #(eb:GetText() or ""))
-        else
-          TimeLoggerLocale:PrintWarning("MSG_CLIPBOARD_UNAVAILABLE")
-        end
-      else
+      local text = eb:GetText() or ""
+      if not CopyTextToClipboard(text) then
+        eb:HighlightText(0, -1)
+        eb:SetFocus()
         TimeLoggerLocale:PrintWarning("MSG_CLIPBOARD_UNAVAILABLE")
       end
     end)
+    f.copyBtn = copyBtn
 
     local closeBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
     closeBtn:SetSize(80, 22)
@@ -610,6 +651,12 @@ local function ShowExportTextPopup(text, title)
   end
 
   TimeLoggerClipboardPopup.titleText:SetText(title)
+  if TimeLoggerClipboardPopup.selectBtn then
+    TimeLoggerClipboardPopup.selectBtn:SetText(TimeLoggerL("BTN_SELECT_ALL"))
+  end
+  if TimeLoggerClipboardPopup.copyBtn then
+    TimeLoggerClipboardPopup.copyBtn:SetText(TimeLoggerL("BTN_COPY"))
+  end
   TimeLoggerClipboardPopup.editBox:SetText(text or "")
   TimeLoggerClipboardPopup.editBox:HighlightText(0, -1)
   TimeLoggerClipboardPopup:Show()
@@ -718,60 +765,18 @@ local function CreateExportUI()
   exportLabel:SetText("Export Sessions:")
   exportLabel:SetTextColor(UI_COLORS.subtitle[1], UI_COLORS.subtitle[2], UI_COLORS.subtitle[3], 1)
 
-  -- Export as CSV button
-  local exportCsvBtn = CreateFrame("Button", nil, f, "BackdropTemplate")
-  exportCsvBtn:SetSize(120, 24)
+  local exportCsvBtn = CreateGoldButton(f, 120, 24, TimeLoggerL("BTN_SESSIONS_CSV"))
   exportCsvBtn:SetPoint("LEFT", exportLabel, "RIGHT", 12, 0)
-  exportCsvBtn:SetBackdrop({
-    bgFile = "Interface\\Buttons\\WHITE8x8",
-    edgeFile = "Interface\\Buttons\\WHITE8x8",
-    tile = false,
-    edgeSize = 1,
-    insets = { left = 1, right = 1, top = 1, bottom = 1 },
-  })
-  exportCsvBtn:SetBackdropColor(0.14, 0.12, 0.08, 1)
-  exportCsvBtn:SetBackdropBorderColor(0.78, 0.62, 0.18, 0.95)
-  local exportCsvLabel = exportCsvBtn:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-  exportCsvLabel:SetPoint("CENTER")
-  exportCsvLabel:SetText("Export as CSV")
-  exportCsvLabel:SetTextColor(0.95, 0.78, 0.28, 1)
-  exportCsvBtn:SetScript("OnEnter", function()
-    exportCsvBtn:SetBackdropColor(0.20, 0.16, 0.10, 1)
-  end)
-  exportCsvBtn:SetScript("OnLeave", function()
-    exportCsvBtn:SetBackdropColor(0.14, 0.12, 0.08, 1)
-  end)
+  exportCsvBtn:SetFrameLevel(f:GetFrameLevel() + 2)
   exportCsvBtn:SetScript("OnClick", function()
-    local text = GetExportTextAsCSV()
-    ShowExportTextPopup(text, TimeLoggerL("UI_EXPORT_CSV") or "Export Sessions (CSV)")
+    ShowExportTextPopup(GetExportTextAsCSV(), TimeLoggerL("BTN_SESSIONS_CSV"))
   end)
 
-  -- Export as JSON button
-  local exportJsonBtn = CreateFrame("Button", nil, f, "BackdropTemplate")
-  exportJsonBtn:SetSize(120, 24)
+  local exportJsonBtn = CreateGoldButton(f, 120, 24, TimeLoggerL("BTN_SESSIONS_JSON"))
   exportJsonBtn:SetPoint("LEFT", exportCsvBtn, "RIGHT", 12, 0)
-  exportJsonBtn:SetBackdrop({
-    bgFile = "Interface\\Buttons\\WHITE8x8",
-    edgeFile = "Interface\\Buttons\\WHITE8x8",
-    tile = false,
-    edgeSize = 1,
-    insets = { left = 1, right = 1, top = 1, bottom = 1 },
-  })
-  exportJsonBtn:SetBackdropColor(0.14, 0.12, 0.08, 1)
-  exportJsonBtn:SetBackdropBorderColor(0.78, 0.62, 0.18, 0.95)
-  local exportJsonLabel = exportJsonBtn:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-  exportJsonLabel:SetPoint("CENTER")
-  exportJsonLabel:SetText("Export as JSON")
-  exportJsonLabel:SetTextColor(0.95, 0.78, 0.28, 1)
-  exportJsonBtn:SetScript("OnEnter", function()
-    exportJsonBtn:SetBackdropColor(0.20, 0.16, 0.10, 1)
-  end)
-  exportJsonBtn:SetScript("OnLeave", function()
-    exportJsonBtn:SetBackdropColor(0.14, 0.12, 0.08, 1)
-  end)
+  exportJsonBtn:SetFrameLevel(f:GetFrameLevel() + 2)
   exportJsonBtn:SetScript("OnClick", function()
-    local text = GetExportTextAsJSON()
-    ShowExportTextPopup(text, TimeLoggerL("UI_EXPORT_JSON") or "Export Sessions (JSON)")
+    ShowExportTextPopup(GetExportTextAsJSON(), TimeLoggerL("BTN_SESSIONS_JSON"))
   end)
 
   local minimapCheck = CreateFrame("CheckButton", nil, f, "UICheckButtonTemplate")
