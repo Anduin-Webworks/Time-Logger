@@ -25,6 +25,7 @@ local EVENT_FIELD_KEYS = {
   "location",
   "weekday",
   "subscription",
+  "subActive",
   "local_dt",
 }
 
@@ -265,6 +266,7 @@ function Storage:BuildSessions(forceRebuild)
           start_location = event.location,
           weekday = event.weekday,
           subscription = event.subscription,
+          subActive = event.subActive,
           start_local_dt = event.local_dt,
         })
         openSessions[key] = #sessions
@@ -423,6 +425,36 @@ function Storage:GetBackupRowCount()
     return 0
   end
   return #db.events_backup
+end
+
+function Storage:RestoreEventsBackup()
+  self:EnsureDB()
+  if type(db.events_backup) ~= "table" then
+    return nil
+  end
+
+  local restoredEvents = {}
+  local restoredOrder = {}
+  local nextId = 1
+
+  for i = 1, #db.events_backup do
+    local backupEvent = db.events_backup[i]
+    if type(backupEvent) == "table" then
+      local event = CopyEventRecord(backupEvent)
+      event.id = nextId
+      restoredEvents[nextId] = event
+      restoredOrder[#restoredOrder + 1] = nextId
+      nextId = nextId + 1
+    end
+  end
+
+  db.events = restoredEvents
+  db.event_order = restoredOrder
+  db.next_event_id = nextId
+  RebuildIndexesFromOrder()
+  self:InvalidateSessions()
+
+  return #restoredOrder
 end
 
 function Storage:SumCharacterPlaytimeFromEvents(character, realm, nowUnix)

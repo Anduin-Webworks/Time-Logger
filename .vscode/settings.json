@@ -15,13 +15,17 @@
         "~\\.vscode\\extensions\\ketho.wow-api-0.22.3\\Annotations\\Core"
     ],
     "Lua.diagnostics.globals": [
-        "ReloadUI",
         "StaticPopupDialogs",
         "SlashCmdList",
         "YES",
         "NO",
+        "UIParent",
+        "ChatFontNormal",
+        "CopyTable",
         "StaticPopup_Show",
         "LE_EXPANSION_LEVEL_CURRENT",
-        "ChatFrame1EditBox"
+        "ChatFrame1EditBox",
+        "ReloadUI",
+        "CLOSE"
     ]
 }

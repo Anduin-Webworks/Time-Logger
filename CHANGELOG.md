@@ -1,10 +1,37 @@
 # CHANGELOG
 
-All notable changes to TimeLogger are documented here.
+## v2.6.0
+
+### Backup restore and crash-recovery settings
+
+- Added a confirmed **Restore backup** action for recovering events from `events_backup`
+- Restoring a backup rebuilds event indexes and cached sessions before refreshing the table view
+- Added a persisted crash-recovery heartbeat slider from **1 to 10 minutes** in one-minute steps
+- Changing the heartbeat interval immediately restarts the active recovery ticker
+
+## v2.5.0
+
+### Correctness and maintainability
+
+- JSON exports now escape all JSON control characters, producing valid output for tabs, backspaces, form feeds, and other control bytes
+- Clipboard export now checks the clipboard API result and correctly falls back to manual selection when copying fails
+- `/tl sub <days>` now rejects negative values while still allowing zero
+- Export Sessions UI text now uses the localization system
+- Removed the duplicate vertical-scroll handler assignment from the table view
+
+## v2.4.0
+
+### Export UI fixes
+
+- Fixed **Sessions CSV** / **Sessions JSON** buttons not responding to clicks (custom buttons now register mouse input and attach labels correctly)
+- Fixed popup **Copy to clipboard** and **Select all** buttons showing raw locale keys (`BTN_COPY_CLIPBOARD`, `BTN_SELECT_ALL`) instead of translated text
+- Popup button labels now use the correct keys (`BTN_COPY`, `BTN_SELECT_ALL`) and refresh each time the export popup opens
+- **Copy to clipboard** falls back to selecting all text when the WoW clipboard API is unavailable
+- Added `BTN_SELECT_ALL` to `Locales/enUS.lua` and all locale overlays in `Locales/LocaleData.lua`
 
 ## v2.3.1
 
-### Minimap button
+### Minimap button update
 
 - **Ctrl + right-click** on the minimap icon reloads the UI (`ReloadUI`)
 - Tooltip updated with the new shortcut (localized)
@@ -39,8 +66,8 @@ All notable changes to TimeLogger are documented here.
 
 ### Localization
 
-- Full localization for all native WoW client languages (11 locale codes)
-- UI, table headers, chat messages, weekdays, and subscription labels translated
+- Full localization framework
+- Plans to add all native WoW client languages (11 locale codes, using translation tools)
 - Export formats remain English/technical for compatibility with external tools
 - New files: `TimeLoggerLocale.lua`, `Locales/enUS.lua`, `Locales/LocaleData.lua`
 
