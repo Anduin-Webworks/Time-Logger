@@ -7,6 +7,7 @@ TimeLoggerLocale:LoadBase({
   UI_SUBTITLE = "Gaming sessions in CSV/JSON format",
   UI_SESSION_LABEL = "Current Session Duration: %s",
   UI_SESSION_NA = "N/A",
+  UI_EXPORT_SESSIONS = "Export Sessions:",
 
   BTN_EVENTS_CSV = "Events CSV",
   BTN_EVENTS_JSON = "Events JSON",
@@ -15,9 +16,12 @@ TimeLoggerLocale:LoadBase({
   BTN_COPY = "Copy to clipboard",
   BTN_SELECT_ALL = "Select all",
   BTN_PRUNE = "Prune",
+  BTN_RESTORE_BACKUP = "Restore backup",
 
   UI_DATA_CLEANUP = "Data cleanup:",
   UI_DAYS_OLD = "days old",
+  UI_HEARTBEAT_INTERVAL = "Crash recovery heartbeat:",
+  UI_HEARTBEAT_VALUE = "%d min",
   UI_TOTALS_HEADER = "Total Playtime Summary",
   UI_TOTAL_THIS_CHAR = "Total This Character: %s",
   UI_TOTAL_ALL_CHARS = "Total All Characters: %s",
@@ -85,4 +89,7 @@ TimeLoggerLocale:LoadBase({
   MSG_CLIPBOARD_UNAVAILABLE = "Clipboard copy is unavailable on this client.",
   MSG_INVALID_DAYS = "Enter a number of days (1 or more).",
   POPUP_PRUNE = "Prune events older than %s days?|nYour full current event list will be copied to events_backup first.",
+  MSG_NO_BACKUP = "No events backup is available to restore.",
+  MSG_RESTORE_DONE = "Restored %d events from events_backup.",
+  POPUP_RESTORE = "Restore %s events from events_backup?|nCurrent events will be replaced by the backup.",
 })

@@ -263,9 +263,6 @@ function TableView:Create(parent, name, options)
   end)
 
   local hSliderUpdating = false
-  scroll:SetScript("OnVerticalScroll", function(self)
-    widget:UpdateVisibleRows()
-  end)
   scroll:SetScript("OnHorizontalScroll", function(self)
     local x = self:GetHorizontalScroll() or 0
     widget:UpdateHeaderScroll()

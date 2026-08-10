@@ -1,8 +1,12 @@
 local ADDON_NAME = ...
 
-local HEARTBEAT_SEC = 300 -- 5 minutes
+local DEFAULT_HEARTBEAT_SEC = 300
+local MIN_HEARTBEAT_SEC = 60
+local MAX_HEARTBEAT_SEC = 600
+local HEARTBEAT_STEP_SEC = 60
 
 local pendingPruneDays
+local pendingRestoreRows
 local tempLogoutTicker
 local lastPlayedRequestUnix
 
@@ -16,6 +20,20 @@ end
 
 local function EnsureDB()
   TimeLoggerStorage:EnsureDB()
+end
+
+local function NormalizeHeartbeatSeconds(value)
+  value = tonumber(value) or DEFAULT_HEARTBEAT_SEC
+  value = math.floor((value / HEARTBEAT_STEP_SEC) + 0.5) * HEARTBEAT_STEP_SEC
+  return math.max(MIN_HEARTBEAT_SEC, math.min(MAX_HEARTBEAT_SEC, value))
+end
+
+local function GetHeartbeatSeconds()
+  EnsureDB()
+  local db = TimeLoggerStorage:GetDB()
+  local heartbeatSec = NormalizeHeartbeatSeconds(db.heartbeatSec)
+  db.heartbeatSec = heartbeatSec
+  return heartbeatSec
 end
 
 --- ISO 8601 instant in UTC (Z suffix); independent of player timezone.
@@ -36,7 +54,22 @@ end
 
 local function JsonEscape(s)
   s = tostring(s or "")
-  return s:gsub("\\", "\\\\"):gsub('"', '\\"'):gsub("\r", "\\r"):gsub("\n", "\\n")
+  s = s:gsub("\\", "\\\\"):gsub('"', '\\"')
+  return s:gsub("[\000-\031]", function(char)
+    local byte = char:byte()
+    if byte == 8 then
+      return "\\b"
+    elseif byte == 9 then
+      return "\\t"
+    elseif byte == 10 then
+      return "\\n"
+    elseif byte == 12 then
+      return "\\f"
+    elseif byte == 13 then
+      return "\\r"
+    end
+    return string.format("\\u%04x", byte)
+  end)
 end
 
 local function BuildEventFields(kind, unix, extra)
@@ -73,7 +106,7 @@ local function BuildEventFields(kind, unix, extra)
   return fields
 end
 
---- Last-known-alive snapshot (same shape as an event). Updated every HEARTBEAT_SEC while in-game.
+--- Last-known-alive snapshot (same shape as an event). Updated at the configured heartbeat interval while in-game.
 --- Used only when the last stored event is login and we need a synthetic logout after crash / missing PLAYER_LOGOUT.
 local function UpdateTempLogout()
   EnsureDB()
@@ -89,7 +122,18 @@ end
 
 local function StartTempLogoutTicker()
   StopTempLogoutTicker()
-  tempLogoutTicker = C_Timer.NewTicker(HEARTBEAT_SEC, UpdateTempLogout)
+  tempLogoutTicker = C_Timer.NewTicker(GetHeartbeatSeconds(), UpdateTempLogout)
+end
+
+local function SetHeartbeatSeconds(value)
+  EnsureDB()
+  local heartbeatSec = NormalizeHeartbeatSeconds(value)
+  local db = TimeLoggerStorage:GetDB()
+  db.heartbeatSec = heartbeatSec
+  if tempLogoutTicker then
+    StartTempLogoutTicker()
+  end
+  return heartbeatSec
 end
 
 --- If the last row is login (no logout was saved), insert a logout using the last heartbeat, if valid.
@@ -229,6 +273,16 @@ local function DoPrune(days)
     keptCount,
     TimeLoggerStorage:GetBackupRowCount()
   )
+end
+
+local function RestoreEventsBackup()
+  EnsureDB()
+  local restoredCount = TimeLoggerStorage:RestoreEventsBackup()
+  if restoredCount == nil then
+    TimeLoggerLocale:PrintWarning("MSG_NO_BACKUP")
+    return
+  end
+  TimeLoggerLocale:Print("MSG_RESTORE_DONE", restoredCount)
 end
 
 -- Export UI -----------------------------------------------------------------
@@ -529,8 +583,8 @@ end
 local function CopyTextToClipboard(text)
   text = text or ""
   if C_ChatInfo and type(C_ChatInfo.CopyStringToClipboard) == "function" then
-    local ok = pcall(C_ChatInfo.CopyStringToClipboard, text)
-    if ok then
+    local ok, copied = pcall(C_ChatInfo.CopyStringToClipboard, text)
+    if ok and copied ~= false then
       TimeLoggerLocale:Print("MSG_COPIED", #text)
       return true
     end
@@ -762,7 +816,7 @@ local function CreateExportUI()
   -- Export buttons header label
   local exportLabel = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   exportLabel:SetPoint("TOPLEFT", 20, -78)
-  exportLabel:SetText("Export Sessions:")
+  exportLabel:SetText(TimeLoggerL("UI_EXPORT_SESSIONS"))
   exportLabel:SetTextColor(UI_COLORS.subtitle[1], UI_COLORS.subtitle[2], UI_COLORS.subtitle[3], 1)
 
   local exportCsvBtn = CreateGoldButton(f, 120, 24, TimeLoggerL("BTN_SESSIONS_CSV"))
@@ -838,6 +892,57 @@ local function CreateExportUI()
     StaticPopup_Show("TIMELOGGER_PRUNE_CONFIRM", tostring(pendingPruneDays))
   end)
 
+  local restoreBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+  restoreBtn:SetSize(112, 22)
+  restoreBtn:SetPoint("LEFT", pruneBtn, "RIGHT", 8, 0)
+  restoreBtn:SetText(TimeLoggerL("BTN_RESTORE_BACKUP"))
+  restoreBtn:SetScript("OnClick", function()
+    local backupRows = TimeLoggerStorage:GetBackupRowCount()
+    if backupRows < 1 then
+      TimeLoggerLocale:PrintWarning("MSG_NO_BACKUP")
+      return
+    end
+    pendingRestoreRows = backupRows
+    StaticPopup_Show("TIMELOGGER_RESTORE_CONFIRM", tostring(backupRows))
+  end)
+
+  local heartbeatLabel = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  heartbeatLabel:SetPoint("BOTTOMLEFT", 20, 18)
+  heartbeatLabel:SetText(TimeLoggerL("UI_HEARTBEAT_INTERVAL"))
+  heartbeatLabel:SetTextColor(UI_COLORS.subtitle[1], UI_COLORS.subtitle[2], UI_COLORS.subtitle[3], 1)
+
+  local heartbeatSlider
+  local ok, slider = pcall(CreateFrame, "Slider", nil, f, "OptionsSliderTemplate")
+  if ok and slider then
+    heartbeatSlider = slider
+  else
+    heartbeatSlider = CreateFrame("Slider", nil, f, "HorizontalSliderTemplate")
+  end
+  heartbeatSlider:SetPoint("LEFT", heartbeatLabel, "RIGHT", 10, 0)
+  heartbeatSlider:SetSize(150, 16)
+  heartbeatSlider:SetOrientation("HORIZONTAL")
+  heartbeatSlider:SetMinMaxValues(MIN_HEARTBEAT_SEC, MAX_HEARTBEAT_SEC)
+  heartbeatSlider:SetValueStep(HEARTBEAT_STEP_SEC)
+  heartbeatSlider:SetObeyStepOnDrag(true)
+
+  local heartbeatValue = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  heartbeatValue:SetPoint("LEFT", heartbeatSlider, "RIGHT", 8, 0)
+  heartbeatValue:SetTextColor(UI_COLORS.subtitle[1], UI_COLORS.subtitle[2], UI_COLORS.subtitle[3], 1)
+  local function RefreshHeartbeatControl(value)
+    local heartbeatSec = NormalizeHeartbeatSeconds(value or GetHeartbeatSeconds())
+    heartbeatValue:SetText(TimeLoggerL("UI_HEARTBEAT_VALUE", math.floor(heartbeatSec / 60)))
+  end
+  heartbeatSlider:SetScript("OnValueChanged", function(_, value, userInput)
+    local heartbeatSec = NormalizeHeartbeatSeconds(value)
+    if userInput then
+      heartbeatSec = SetHeartbeatSeconds(heartbeatSec)
+    end
+    RefreshHeartbeatControl(heartbeatSec)
+  end)
+  heartbeatSlider:SetValue(GetHeartbeatSeconds())
+  RefreshHeartbeatControl()
+  f.heartbeatSlider = heartbeatSlider
+
   local totalsHeader = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   totalsHeader:SetPoint("BOTTOMRIGHT", -20, 62)
   totalsHeader:SetText(TimeLoggerL("UI_TOTALS_HEADER"))
@@ -898,6 +1003,9 @@ local function ShowExport()
   if exportFrame.minimapCheck then
     exportFrame.minimapCheck:SetChecked(TimeLoggerMinimap:IsEnabled())
   end
+  if exportFrame.heartbeatSlider then
+    exportFrame.heartbeatSlider:SetValue(GetHeartbeatSeconds())
+  end
   RequestPlayedTotals(false)
   RefreshTableView()
   RefreshCurrentSessionLabel()
@@ -919,7 +1027,7 @@ local function ToggleExport()
   ShowExport()
 end
 
-StaticPopupDialogs["TIMELOGGER_PRUNE_CONFIRM"] = {
+  StaticPopupDialogs["TIMELOGGER_PRUNE_CONFIRM"] = {
   text = TimeLoggerL("POPUP_PRUNE"),
   button1 = YES,
   button2 = NO,
@@ -934,6 +1042,29 @@ StaticPopupDialogs["TIMELOGGER_PRUNE_CONFIRM"] = {
   end,
   OnCancel = function()
     pendingPruneDays = nil
+  end,
+  timeout = 0,
+  whileDead = true,
+  hideOnEscape = true,
+}
+
+StaticPopupDialogs["TIMELOGGER_RESTORE_CONFIRM"] = {
+  text = TimeLoggerL("POPUP_RESTORE"),
+  button1 = YES,
+  button2 = NO,
+  OnAccept = function()
+    if pendingRestoreRows then
+      RestoreEventsBackup()
+      pendingRestoreRows = nil
+      if exportFrame and exportFrame:IsShown() then
+        RefreshTableView()
+        RefreshPlaytimeSummaryLabels()
+        RefreshCurrentSessionLabel()
+      end
+    end
+  end,
+  OnCancel = function()
+    pendingRestoreRows = nil
   end,
   timeout = 0,
   whileDead = true,
@@ -993,6 +1124,10 @@ SlashCmdList["TIMELOGGER"] = function(msg)
   cmd = (cmd or ""):lower()
   if cmd == "sub" and tonumber(arg) then
     local days = tonumber(arg)
+    if days < 0 then
+      print("|cffff9900TimeLogger:|r Subscription days must be non-negative.")
+      return
+    end
     local currentUnix = GetUnix()
     local db
     if TimeLoggerStorage and type(TimeLoggerStorage.GetDB) == "function" then

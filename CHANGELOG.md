@@ -1,8 +1,25 @@
 # CHANGELOG
 
-All notable changes to TimeLogger are documented here.
+## v2.6.0
 
-## v2.3.2
+### Backup restore and crash-recovery settings
+
+- Added a confirmed **Restore backup** action for recovering events from `events_backup`
+- Restoring a backup rebuilds event indexes and cached sessions before refreshing the table view
+- Added a persisted crash-recovery heartbeat slider from **1 to 10 minutes** in one-minute steps
+- Changing the heartbeat interval immediately restarts the active recovery ticker
+
+## v2.5.0
+
+### Correctness and maintainability
+
+- JSON exports now escape all JSON control characters, producing valid output for tabs, backspaces, form feeds, and other control bytes
+- Clipboard export now checks the clipboard API result and correctly falls back to manual selection when copying fails
+- `/tl sub <days>` now rejects negative values while still allowing zero
+- Export Sessions UI text now uses the localization system
+- Removed the duplicate vertical-scroll handler assignment from the table view
+
+## v2.4.0
 
 ### Export UI fixes
 
@@ -14,7 +31,7 @@ All notable changes to TimeLogger are documented here.
 
 ## v2.3.1
 
-### Minimap button
+### Minimap button update
 
 - **Ctrl + right-click** on the minimap icon reloads the UI (`ReloadUI`)
 - Tooltip updated with the new shortcut (localized)
