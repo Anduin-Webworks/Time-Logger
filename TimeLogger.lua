@@ -10,10 +10,10 @@ local pendingRestoreRows
 local tempLogoutTicker
 local lastPlayedRequestUnix
 
---- Centralized time collection using server time for timezone-independent timestamps
+--- Centralized time collection using the synchronized Unix timestamp.
 local function GetUnix()
-  if C_DateAndTime and C_DateAndTime.GetServerTimeLocal then
-    return C_DateAndTime.GetServerTimeLocal()
+  if GetServerTime then
+    return GetServerTime()
   end
   return time()
 end
@@ -370,15 +370,6 @@ local function GetSessionColumns()
       width = 68,
       getValue = function(row)
         return TimeLoggerLocale:FormatWeekday(row.weekday)
-      end,
-    },
-    {
-      key = "subActive",
-      title = TimeLoggerL("COL_SUB_ACTIVE"),
-      width = 84,
-      getValue = function(row)
-        if row.subActive == nil then return "" end
-        return row.subActive and TimeLoggerL("VAL_TRUE") or TimeLoggerL("VAL_FALSE")
       end,
     },
     { key = "character", title = TimeLoggerL("COL_CHARACTER"), width = 88 },

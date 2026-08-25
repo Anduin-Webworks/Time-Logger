@@ -1,185 +1,145 @@
 # TimeLogger
 
-Retail WoW addon that records **login** and **logout** times, enriches each event with client context (patch, location, subscription, and more), and lets you **browse**, **filter**, and **export** your history from an in-game spreadsheet-style window.
+TimeLogger is a Retail WoW addon that records character logins and logouts, derives playable sessions, and provides an in-game table for browsing, filtering, and exporting that history.
+
+Current release: **2.6.3**
 
 ## Features
 
-- Automatic **login/logout** logging with crash recovery via heartbeat snapshots
-- **Indexed storage** designed for thousands of rows without performance issues
-- **Table view** with per-column header filters (Excel-style)
-- **CSV/JSON export** for derived sessions with filter-aware copy to clipboard
-- **Context capture** on each event: patch version, expansion, location, weekday, subscription status, local datetime
-- **Localization** for all native WoW client languages
-- **Minimap button** (optional) to toggle the window; draggable around the minimap
-- **Prune** old events with automatic pre-prune backup
+- Records `PLAYER_LOGIN` and `PLAYER_LOGOUT` events automatically.
+- Recovers sessions after a crash or force quit by writing configurable heartbeat snapshots.
+- Stores events in an indexed SavedVariables database and derives cached sessions from them.
+- Shows a virtualized, spreadsheet-style sessions table with per-column filters.
+- Exports the current session list, or only the rows matching active filters, as CSV or JSON.
+- Captures patch, expansion, location, weekday, and local date/time with events.
+- Shows current-session duration and playtime totals for the current character and all characters.
+- Provides optional, draggable minimap access.
+- Prunes old events with a pre-prune backup and can restore that backup later.
+- Includes localized UI text for the supported WoW client locales.
 
-## Commands
+## Installation and use
+
+Install the addon in `Interface\AddOns\TimeLogger`, then log in. Events are recorded automatically.
+
+Open the window with any of these commands:
 
 | Command | Action |
 |---------|--------|
-| `/timelogger` | Open the export window |
-| `/tlog` | Same as above |
+| `/timelogger` | Open the TimeLogger window |
+| `/tlog` | Open the TimeLogger window |
+| `/tl` | Open the window, or show command help when an argument is supplied |
+| `/tl sub <days>` | Set the stored subscription expiration to the specified number of days from now; zero is allowed |
 
-The **minimap button** (when enabled) **toggles** the window open and closed. Slash commands always **open** it.
+The optional minimap button toggles the window. It is enabled by default and can be disabled with the **Minimap button** checkbox.
+
+## Export window
+
+The window displays derived sessions rather than raw login/logout events. Its main controls are:
+
+- **Sessions CSV** and **Sessions JSON** — open a selectable export popup.
+- **Copy to clipboard** — uses the WoW clipboard API when available.
+- **Select all** — selects the export text for manual copying when clipboard access is unavailable.
+- **Minimap button** — show or hide the launcher.
+- **Prune** — remove events older than a selected number of days after confirmation.
+- **Restore backup** — replace the current event list with the available `events_backup` after confirmation.
+- **Crash recovery heartbeat** — choose an interval from 1 to 10 minutes, in one-minute steps. The default is 5 minutes, and changing it restarts the active ticker immediately.
+
+The table has filter boxes below its headers. Filters combine with AND logic. If filters are active when an export button is used, only the matching visible sessions are exported.
+
+## Crash recovery
+
+After login, TimeLogger maintains a last-known-alive snapshot immediately and updates it at the configured heartbeat interval. If the previous saved event is a login without a matching logout, the next login creates a synthetic logout from that snapshot and marks it with `recovery = true`.
+
+Recovery depends on the latest heartbeat having been written to SavedVariables. WoW normally persists SavedVariables on logout or `/reload`, so a crash before that save can prevent recovery. A recovered logout can also be as old as the selected heartbeat interval. On a clean logout, the ticker stops and the temporary snapshot is cleared.
+
+## Sessions
+
+Sessions are built chronologically per character from the event log and cached until events change.
+
+| Status | Meaning |
+|--------|---------|
+| `closed` | Normal login followed by logout |
+| `no_logout` | Another login occurred before a logout was recorded |
+| `open` | Login has no logout yet |
+| `recovered` | Closed by a synthetic crash-recovery logout |
+
+The table shows session start/end times, duration, patch, expansion, login/logout locations, weekday, character, realm, and status. Subscription status is still retained in event data and exports, but is not shown as a table column in the current release.
+
+## Recorded event data
+
+Each event contains the following fields when available:
+
+| Field | Description |
+|-------|-------------|
+| `unix` | Synchronized Unix timestamp |
+| `utc` | ISO 8601 UTC instant with a `Z` suffix |
+| `local_dt` | Local date/time in `YYYY-MM-DD HH:MM:SS` format |
+| `event` | `login` or `logout` |
+| `character` / `realm` | Character identity |
+| `patch` | Game version from `GetBuildInfo()` |
+| `expansion` | Current expansion name |
+| `location` | Zone and subzone when available |
+| `weekday` | ISO weekday, where Monday is 1 and Sunday is 7 |
+| `subscription` | `subscribed`, `not_subscribed`, `trial`, `veteran`, or `unknown` |
+| `subActive` | Whether the TimeLogger subscription-expiration value was active at that event |
+| `recovery` | `true` only for synthetic recovery logouts |
+
+Login location may be enriched shortly after login once the world has loaded. Older records may not contain fields introduced after they were created.
+
+## Storage, pruning, and restore
+
+Data is stored locally in the WoW SavedVariables file:
+
+`WTF\Account\<account>\SavedVariables\TimeLogger.lua`
+
+The current storage schema is v3. It uses numeric event IDs, chronological ordering, per-character indexes, cached sessions, playtime totals, minimap settings, and the `events_backup` snapshot.
+
+When pruning, TimeLogger copies the complete current event list to `events_backup` first. The backup is refreshed when it is missing or more than one hour old. The **Restore backup** button replaces the current event list with that snapshot, rebuilds indexes and sessions, and refreshes the table.
+
+Legacy flat event arrays are migrated automatically when the database is first loaded.
+
+## Export formats
+
+Exports use stable English field names and raw values for spreadsheet and scripting compatibility. The in-game table localizes labels and display values.
+
+The current UI exports sessions only:
+
+### Sessions CSV
+
+`session_id,start_unix,start_utc,start_local_dt,end_unix,end_utc,end_local_dt,duration_sec,patch,expansion,start_location,end_location,weekday,subscription,subActive,character,realm,status`
+
+### Sessions JSON
+
+An array of objects with matching fields. The JSON character field is named `char` for historical compatibility.
+
+Raw login/logout events remain in SavedVariables and use the corresponding event fields described above.
+
+## Minimap button
+
+- **Left-click** — toggle the TimeLogger window.
+- **Drag** — reposition the button around the minimap; the angle is saved per account.
+- **Ctrl + right-click** — reload the UI.
+
+The addon uses `TimeLoggerButton.png` for the launcher icon and falls back to a pocket-watch icon if necessary.
+
+## Localization
+
+Supported locales are `deDE`, `enUS`/`enGB`, `esES`, `esMX`, `frFR`, `itIT`, `koKR`, `ptBR`, `ruRU`, `zhCN`, and `zhTW`.
 
 ## Project structure
 
 | File / folder | Purpose |
 |---------------|---------|
-| `TimeLogger.toc` | Addon manifest, version, SavedVariables |
-| `TimeLogger.lua` | Event handlers, export UI shell, slash commands |
-| `TimeLoggerStorage.lua` | Indexed event database (SavedVariables-backed) |
-| `TimeLoggerContext.lua` | Captures patch, expansion, location, subscription, etc. |
-| `TimeLoggerTableView.lua` | Reusable spreadsheet table with header filters |
+| `TimeLogger.toc` | Addon manifest, version, and SavedVariables declaration |
+| `TimeLogger.lua` | Event handlers, UI, exports, slash commands, and heartbeat control |
+| `TimeLoggerStorage.lua` | Indexed event database, session derivation, pruning, and backup restore |
+| `TimeLoggerContext.lua` | Patch, expansion, location, weekday, subscription, and local-time capture |
+| `TimeLoggerTableView.lua` | Virtualized table and column filtering |
 | `TimeLoggerMinimap.lua` | Draggable minimap launcher |
 | `TimeLoggerLocale.lua` | Localization loader and formatters |
 | `Locales/enUS.lua` | Base English strings |
-| `Locales/LocaleData.lua` | Translations for all other WoW locales |
-| `TimeLoggerLogo.png` | Optional; used for addon icon and minimap button |
-
-## Export window
-
-The UI uses a gold / silver / black theme:
-
-- **Header** — title, current session duration, **Sessions CSV** / **Sessions JSON** buttons, minimap toggle
-- **Table** — scrollable, filterable **sessions** grid (virtualized rows for performance)
-- **Footer** — prune controls and per-character / account playtime summary
-
-The table always shows **derived sessions** (not raw login/logout events). Raw events remain in SavedVariables and are documented under [Export formats](#export-formats) for reference.
-
-### Filtering
-
-Filter boxes sit under each column header. Type to filter; multiple columns combine with AND logic. When filters are active, exports include **only the visible rows** shown in the table.
-
-### Export workflow
-
-1. Click **Sessions CSV** or **Sessions JSON** in the header.
-2. A popup opens with the export text in a scrollable, selectable edit box (text is pre-selected).
-3. Click **Copy to clipboard** to copy via the WoW clipboard API, or **Select all** and copy manually (`Ctrl+C`).
-4. If clipboard copy is unavailable on your client, the addon selects all text automatically and shows a chat warning so you can copy by hand.
-
-Export button labels and popup controls are fully localized.
-
-## Raw events
-
-On **`PLAYER_LOGIN`** and **`PLAYER_LOGOUT`**, a row is appended to the indexed store.
-
-### Core fields
-
-| Field | Description |
-|-------|-------------|
-| `unix` | Server-local Unix timestamp |
-| `utc` | ISO 8601 UTC instant (`…Z`) |
-| `event` | `login` or `logout` |
-| `character` | Character name |
-| `realm` | Realm name |
-| `recovery` | Optional; `true` only on synthetic crash-recovery logouts |
-
-### Context fields (v2.2+)
-
-| Field | Description |
-|-------|-------------|
-| `patch` | Game version from `GetBuildInfo()` (e.g. `12.0.1`) |
-| `expansion` | Current expansion display name |
-| `location` | Zone and subzone at login/logout (login location may update ~2s after login once the world loads) |
-| `weekday` | ISO weekday from event time (1 = Monday … 7 = Sunday) |
-| `subscription` | Account status code: `subscribed`, `not_subscribed`, `trial`, `veteran`, or `unknown` |
-| `local_dt` | Local machine datetime (`YYYY-MM-DD HH:MM:SS`) |
-
-**Subscription note:** WoW’s API exposes recurring subscription via `IsSubscribed()` and trial states separately. Accounts using **WoW Token game time only** (no recurring sub) typically appear as `not_subscribed`.
-
-Older rows recorded before v2.2 leave context fields empty.
-
-## Crash recovery (`temp_logout`)
-
-If the client exits without **`PLAYER_LOGOUT`** (crash, force quit, etc.), the last stored event may be a **`login`** with no matching **`logout`**.
-
-The addon maintains **`TimeLoggerDB.temp_logout`** — a logout-shaped snapshot updated:
-
-- once **immediately** after each successful login, and  
-- every **5 minutes** while you remain in game.
-
-On the **next** login, if the last event is still **`login`**, a **synthetic logout** is inserted from the last heartbeat, with **`recovery = true`**.
-
-**Limitation:** SavedVariables are written on logout or `/reload`, not continuously. If the client dies before a save that included a recent heartbeat, recovery may not run. When recovery does apply, the logout time can be up to **~5 minutes** after the real exit.
-
-On a clean logout, the heartbeat ticker stops and **`temp_logout`** is cleared.
-
-## Sessions (derived)
-
-Sessions are **computed** from the event log (chronological, per character). They are cached and invalidated when events change.
-
-| Status | Meaning |
-|--------|---------|
-| `closed` | Normal login then logout |
-| `no_logout` | Another login before logout (e.g. crash) |
-| `open` | Login with no logout yet |
-| `recovered` | Closed by a synthetic recovery logout |
-
-Session exports include login/logout locations, patch, expansion, weekday, subscription, and local datetimes from the paired events.
-
-## Storage
-
-Data persists in **`TimeLoggerDB`** (SavedVariables). There is no external database — WoW addons store Lua tables to disk on logout/reload.
-
-**Schema v3** (current) uses:
-
-- `events[id]` — event records keyed by numeric ID  
-- `event_order[]` — chronological ID list  
-- `indexes.by_character` / `indexes.last_by_character` — fast per-character lookups  
-- `sessions` — optional cached derived sessions  
-- `played_totals` — per-character playtime from the game client  
-- `minimap` — `{ enabled, angle }` for the minimap button  
-- `events_backup` / `events_backup_time` — pre-prune snapshot  
-
-Legacy flat `events[]` arrays are migrated automatically on first load.
-
-**On disk:** `WTF\Account\<account>\SavedVariables\TimeLogger.lua`
-
-## Prune
-
-At the bottom of the window: enter days, click **Prune**, confirm.
-
-Events older than N days are removed. The full current list is copied to **`events_backup`** first (refreshed if the previous backup is over an hour old).
-
-## Export formats
-
-Technical English field names and raw stored values are used in exports so spreadsheets and scripts stay consistent. The in-game table localizes labels and display values.
-
-The export window currently produces **session** CSV/JSON only. **Event** formats below describe the raw stored login/logout records in SavedVariables.
-
-### Events CSV
-
-`unix,utc_iso,local_dt,weekday,event,character,realm,location,patch,expansion,subscription,recovery`
-
-### Events JSON
-
-Array of objects with the same fields; `recovery` is only included when `true`.
-
-### Sessions CSV
-
-`session_id,start_unix,start_utc,start_local_dt,end_unix,end_utc,end_local_dt,duration_sec,patch,expansion,start_location,end_location,weekday,subscription,character,realm,status`
-
-### Sessions JSON
-
-Array of objects with matching fields (`char` instead of `character` in JSON for historical compatibility).
-
-## Localization
-
-Supported locales: **deDE**, **enUS** (also **enGB**), **esES**, **esMX**, **frFR**, **itIT**, **koKR**, **ptBR**, **ruRU**, **zhCN**, **zhTW**.
-
-UI strings, column headers, weekdays, subscription labels, export buttons, and chat messages follow the WoW client language. To add or edit translations, update `Locales/enUS.lua` (base) and `Locales/LocaleData.lua` (overlays).
-
-## Minimap button
-
-Enabled by default. Uncheck **Minimap button** in the export window to hide it.
-
-- **Left-click** — toggle the export window  
-- **Drag** — reposition around the minimap (saved per account)  
-- **Ctrl + right-click** — reload the UI (`/reload`)
-
-Uses `TimeLoggerLogo.png` when present; otherwise a pocket-watch fallback icon.
+| `Locales/LocaleData.lua` | Other locale overlays |
 
 ## Requirements
 
-- **Retail WoW** (Interface versions listed in `TimeLogger.toc`)
+- Retail WoW, using one of the interface versions listed in `TimeLogger.toc`.
