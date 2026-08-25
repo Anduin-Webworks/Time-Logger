@@ -17,15 +17,11 @@ function Context:GetPatchVersion()
 end
 
 function Context:GetExpansionName()
-  if GetExpansionDisplayInfo and LE_EXPANSION_LEVEL_CURRENT then
-    local info = GetExpansionDisplayInfo(LE_EXPANSION_LEVEL_CURRENT)
-    if info and info.name and info.name ~= "" then
-      return info.name
-    end
-  end
-
-  local level = (GetServerExpansionLevel and GetServerExpansionLevel())
+  -- The client level is available during PLAYER_LOGIN and identifies the
+  -- actual game flavor. The server level can still be 0 at that point.
+  local level = (GetClientDisplayExpansionLevel and GetClientDisplayExpansionLevel())
     or (GetExpansionLevel and GetExpansionLevel())
+    or (GetServerExpansionLevel and GetServerExpansionLevel())
     or LE_EXPANSION_LEVEL_CURRENT
 
   if level and _G["EXPANSION_NAME" .. level] then

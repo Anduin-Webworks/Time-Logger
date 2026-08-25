@@ -201,11 +201,16 @@ function TableView:Create(parent, name, options)
   headerClip:SetPoint("TOPRIGHT", widget, "TOPRIGHT", -8, -8)
   headerClip:SetHeight(headerHeight)
   headerClip:SetClipsChildren(true)
+  -- Keep the clipped header above the scrolling body.  The body is created
+  -- afterwards and can otherwise receive a higher sibling frame level,
+  -- hiding the title and filter controls even though they are laid out.
+  headerClip:SetFrameLevel(widget:GetFrameLevel() + 2)
   widget.headerClip = headerClip
 
   local header = CreateFrame("Frame", nil, headerClip)
   header:SetPoint("TOPLEFT", headerClip, "TOPLEFT", 0, 0)
   header:SetHeight(headerHeight)
+  header:SetFrameLevel(headerClip:GetFrameLevel() + 1)
   widget.header = header
 
   local headerBg = header:CreateTexture(nil, "BACKGROUND")

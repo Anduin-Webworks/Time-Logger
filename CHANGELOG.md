@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## v2.6.3
+
+### Bug Fixes
+
+- Fixed the identification of the expansion almost always set to `Classic`.
+- Fixed a rendering issue on the row headers.
+- Fixed the `Local Time` fetching logic.
+- Removed the Subscription status column.
+
 ## v2.6.0
 
 ### Backup restore and crash-recovery settings
