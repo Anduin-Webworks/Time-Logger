@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## v2.6.4
+
+### TOC Upgrade
+
+- .toc bumped to 12.1.5
+
 ## v2.6.3
 
 ### Bug Fixes

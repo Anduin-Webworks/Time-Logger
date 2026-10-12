@@ -1,8 +1,8 @@
-## Interface: 120007, 120100
+## Interface: 120105, 120100
 ## Title: TimeLogger
 ## Notes: Records character login and logout times. Use /timelogger or /tlog to browse, filter, and export data.
 ## Author: Oswaldovzki
-## Version: 2.6.3
+## Version: 2.6.4
 ## SavedVariables: TimeLoggerDB
 ## IconTexture: Interface\AddOns\TimeLogger\TimeLoggerLogo.png
 ## X-Curse-Project-ID: 1492060
